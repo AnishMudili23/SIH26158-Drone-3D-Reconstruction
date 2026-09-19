@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Data & large artifacts (never commit raw datasets or model outputs)
+data/raw/
+data/datasets/
+outputs/
+*.mp4
+*.mov
+*.avi
+*.ply
+*.obj
+*.glb
+*.tif
+*.tiff
+checkpoints/
+*.pth
+*.onnx
+
+# OS
+Thumbs.db
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+tools/

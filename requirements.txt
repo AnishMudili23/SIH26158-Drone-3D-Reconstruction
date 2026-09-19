@@ -1,0 +1,20 @@
+# SIH26158 — pinned versions, recorded as they were installed (TECH_STACK.md's
+# "Version Pinning Note"). Python 3.11.6, RTX 3050 6GB, Windows 11.
+#
+# PyTorch is installed separately (CUDA build, not on plain PyPI):
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+# Pinned version once installed: torch==2.5.1+cu121
+
+numpy==2.4.6
+opencv-python==5.0.0.93
+matplotlib==3.11.2
+imagehash==4.3.2
+scipy==1.17.1
+pyproj==3.7.2
+transformers==5.17.0
+huggingface_hub==1.32.0
+safetensors==0.8.0
+
+# Installing (Phase 2/5 dependencies):
+# open3d           — point cloud outlier removal, Poisson/TSDF meshing (Open3D stage)
+# rasterio         — DSM/DTM GeoTIFF export (Phase 7)

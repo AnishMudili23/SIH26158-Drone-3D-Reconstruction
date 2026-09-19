@@ -1,0 +1,99 @@
+{
+  "gpu": {
+    "cuda_available": false,
+    "device_name": null,
+    "total_vram_mb": null,
+    "driver_version": "592.27",
+    "cuda_runtime_version": null,
+    "torch_version": null,
+    "recommendation": "PyTorch not installed \u2014 cannot confirm CUDA path. CPU-only fallback assumed until torch is available."
+  },
+  "scale_recovery_sweep": [
+    {
+      "gps_noise_std_m": 1.0,
+      "n_camera_positions": 50,
+      "path_length_m": 300.0,
+      "mean_abs_scale_error_pct": 0.15785345323100716,
+      "p90_scale_error_pct": 0.3167948664660962,
+      "n_trials": 200
+    },
+    {
+      "gps_noise_std_m": 1.0,
+      "n_camera_positions": 150,
+      "path_length_m": 300.0,
+      "mean_abs_scale_error_pct": 0.0851169439955212,
+      "p90_scale_error_pct": 0.18247507733304838,
+      "n_trials": 200
+    },
+    {
+      "gps_noise_std_m": 1.0,
+      "n_camera_positions": 400,
+      "path_length_m": 300.0,
+      "mean_abs_scale_error_pct": 0.0522827185218091,
+      "p90_scale_error_pct": 0.11206433801771162,
+      "n_trials": 200
+    },
+    {
+      "gps_noise_std_m": 2.5,
+      "n_camera_positions": 50,
+      "path_length_m": 300.0,
+      "mean_abs_scale_error_pct": 0.3385657289751245,
+      "p90_scale_error_pct": 0.7160755552537569,
+      "n_trials": 200
+    },
+    {
+      "gps_noise_std_m": 2.5,
+      "n_camera_positions": 150,
+      "path_length_m": 300.0,
+      "mean_abs_scale_error_pct": 0.18224493192309058,
+      "p90_scale_error_pct": 0.3798128050544575,
+      "n_trials": 200
+    },
+    {
+      "gps_noise_std_m": 2.5,
+      "n_camera_positions": 400,
+      "path_length_m": 300.0,
+      "mean_abs_scale_error_pct": 0.11108691822000122,
+      "p90_scale_error_pct": 0.2551681502355885,
+      "n_trials": 200
+    },
+    {
+      "gps_noise_std_m": 5.0,
+      "n_camera_positions": 50,
+      "path_length_m": 300.0,
+      "mean_abs_scale_error_pct": 0.6502288316028401,
+      "p90_scale_error_pct": 1.4334819283708111,
+      "n_trials": 200
+    },
+    {
+      "gps_noise_std_m": 5.0,
+      "n_camera_positions": 150,
+      "path_length_m": 300.0,
+      "mean_abs_scale_error_pct": 0.35695763780101897,
+      "p90_scale_error_pct": 0.733968774318816,
+      "n_trials": 200
+    },
+    {
+      "gps_noise_std_m": 5.0,
+      "n_camera_positions": 400,
+      "path_length_m": 300.0,
+      "mean_abs_scale_error_pct": 0.21449354380055108,
+      "p90_scale_error_pct": 0.5053169240466654,
+      "n_trials": 200
+    }
+  ],
+  "coverage": {
+    "n_buildings": 18,
+    "path_length_m": 220.0,
+    "altitude_m": 80.0,
+    "gimbal_pitch_deg": 25.0,
+    "half_fov_deg": 35.0,
+    "n_camera_positions": 120,
+    "coverage_pct_overall": 35.68458218909376,
+    "coverage_pct_by_class": {
+      "facade": 21.125,
+      "ground": 47.63290945304121,
+      "roof": 41.42394822006473
+    }
+  }
+}
