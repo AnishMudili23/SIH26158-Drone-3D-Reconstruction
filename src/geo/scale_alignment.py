@@ -21,7 +21,7 @@ import pyproj
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from common.alignment import umeyama_alignment  # noqa: E402
-from common.geometry_interface import GeometryEstimate  # noqa: E402
+from common.geometry_interface import CameraPose, GeometryEstimate  # noqa: E402
 
 
 @dataclass
@@ -36,12 +36,34 @@ class GpsFix:
 class GeoAlignedResult:
     points_enu: np.ndarray          # (N, 3) metric ENU meters
     camera_centers_enu: np.ndarray  # (M, 3) metric ENU meters
+    aligned_poses: list[CameraPose]  # gravity-aligned extrinsics, world input in meters
     scale_factor: float             # SfM-units -> meters
     origin_lat: float
     origin_lon: float
     origin_alt_m: float
     n_gps_correspondences: int
     mean_alignment_residual_m: float
+
+
+def _rederive_pose_for_aligned_world(
+    pose: CameraPose, scale: float, rotation: np.ndarray, translation: np.ndarray
+) -> CameraPose:
+    """Re-expresses a camera's extrinsic so it projects points given in the ALIGNED
+    (real-world-meters) frame, instead of COLMAP's original arbitrary-scale frame.
+
+    Derivation: alignment maps X_aligned = scale*rotation @ X_orig + translation, so
+    X_orig = rotation^T @ (X_aligned - translation) / scale. Substituting into the
+    camera's original equation x_cam = R@X_orig + t gives
+    R_new = R @ rotation^T / scale,  t_new = t - R_new @ translation.
+    x_cam's own units/meaning are unchanged (still whatever COLMAP originally used) —
+    only the input world-point's units changed from arbitrary-scale to real meters —
+    and standard pinhole projection (pixel = K @ (x_cam / x_cam.z)) is invariant to any
+    uniform positive scaling of x_cam, so this is safe to use for projection/homography
+    purposes even though R_new is no longer a strictly orthonormal rotation matrix.
+    """
+    r_new = pose.rotation @ rotation.T / scale
+    t_new = pose.translation - r_new @ translation
+    return CameraPose(frame_path=pose.frame_path, rotation=r_new, translation=t_new, intrinsics=pose.intrinsics)
 
 
 _ECEF_FROM_GPS = pyproj.Transformer.from_crs("EPSG:4979", "EPSG:4978", always_xy=True)
@@ -95,6 +117,7 @@ def align_geometry_to_gps(geometry: GeometryEstimate, gps_fixes: list[GpsFix]) -
 
     matched_sfm_centers = []
     matched_fixes = []
+    matched_poses = []
     for pose in geometry.poses:
         name = Path(pose.frame_path).name
         if name in fixes_by_name:
@@ -102,6 +125,7 @@ def align_geometry_to_gps(geometry: GeometryEstimate, gps_fixes: list[GpsFix]) -
             center = -pose.rotation.T @ pose.translation
             matched_sfm_centers.append(center)
             matched_fixes.append(fixes_by_name[name])
+            matched_poses.append(pose)
 
     if len(matched_sfm_centers) < 3:
         raise ValueError(
@@ -119,10 +143,14 @@ def align_geometry_to_gps(geometry: GeometryEstimate, gps_fixes: list[GpsFix]) -
     residuals = np.linalg.norm(aligned_centers - gps_enu, axis=1)
 
     aligned_points = (scale * rotation @ geometry.points_xyz.T).T + translation
+    aligned_poses = [
+        _rederive_pose_for_aligned_world(pose, scale, rotation, translation) for pose in matched_poses
+    ]
 
     return GeoAlignedResult(
         points_enu=aligned_points,
         camera_centers_enu=aligned_centers,
+        aligned_poses=aligned_poses,
         scale_factor=scale,
         origin_lat=origin_lat,
         origin_lon=origin_lon,

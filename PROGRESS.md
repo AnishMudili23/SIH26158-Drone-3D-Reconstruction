@@ -457,3 +457,79 @@ Finished: 2026-09-19 20:58
 Assumptions made: none new. Deviations: none. Issues: none beyond what's already logged
 for the shared transformers/torch dependency chain above.
 
+---
+
+## Phase 6/7 — confirmed working end-to-end against real COLMAP output; two real bugs
+found and fixed (outlier removal added as a new module)
+Status: DONE (class tagging, confidence report, DSM/DTM, orthomosaic — all against the
+real `synthetic_3d_scene_cv` reconstruction, not synthetic-only unit tests)
+Finished: 2026-09-20 00:20
+
+- Ran real segmentation over all 60 reconstruction frames (`outputs/phase2_colmap_test/
+  masks/`), then real class tagging against the real sparse model: 21,917 points tagged
+  "Building", 1,096 "Road" (no Tree/vegetation/car/human classes present — expected,
+  since the synthetic scene has no such content; this validates the *code path*, not
+  segmentation accuracy on real drone imagery, which needs real UAVid data).
+- Real confidence report: 60.4% high / 39.1% medium / 0.5% low confidence tiers,
+  derived from COLMAP's own real track-length (2-27) and reprojection-error
+  (0.002-2.26px) distributions — sensible numbers for a reasonably well-constrained
+  synthetic reconstruction.
+- Real DSM/DTM export via `rasterio`: produced valid GeoTIFFs, no repeat of the
+  earlier NaN-propagation bug.
+- Real orthomosaic export initially looked badly broken (0.7% coverage, almost the
+  entire canvas black) — root-caused properly this time (see Phase 3 lesson above)
+  rather than accepting the first plausible-looking explanation:
+  1. First hypothesis (wrong): the flat-ground `z_ref` (naive median of *all* points,
+     dominated by elevated building points) was picking a bad plane. Added
+     `estimate_ground_z_ref()` (median of Road/Background-clutter-tagged points only,
+     matching DSM/DTM's own ground-class proxy) — this barely changed `z_ref` and
+     barely improved coverage (0.66%), so it wasn't the real cause either (kept anyway,
+     it's still more correct than the naive median).
+  2. Second, deeper issue found: I had been testing directly on **raw, unaligned
+     COLMAP output** — but the "flat ground = constant Z" assumption underlying both
+     DSM/DTM and orthomosaic is only valid in a gravity-aligned frame, which raw COLMAP
+     output does not provide (SfM reconstructs up to an arbitrary similarity
+     transform). ARCHITECTURE.md's pipeline order already says Scale+Geo Alignment
+     comes before these exports — my test had skipped that step for expediency. Fixed
+     by extending `align_geometry_to_gps()` to also return properly re-derived,
+     gravity-aligned `CameraPose` objects (`GeoAlignedResult.aligned_poses`), not just
+     aligned point positions — added `_rederive_pose_for_aligned_world()`, derived from
+     first principles (substituting the alignment's inverse into the camera's original
+     projection equation) and verified numerically to reproduce the *exact same* camera
+     coordinates as before to ~1e-16 (see `tests/test_alignment.py`'s new test).
+  3. Even after using properly aligned poses, coverage barely moved (1.3%) and the
+     computed scene *extent* was absurd: ~990m x 890m for a scene that's actually
+     ~150m x 150m. Diagnosed via percentiles (not guessed): 99% of points sat within
+     +-4.7 units of center, but the raw max was 62 units — a handful of classic
+     weakly-triangulated SfM outlier points (3 out of 23,013) were solely responsible
+     for a ~12x-inflated bounding box (and, after Phase 3's ~12.5x scale factor, a
+     ~1000m-scale absurdity). This is exactly ARCHITECTURE.md's "Outlier Removal
+     (statistical + radius filtering, Open3D)" pipeline stage — which had not actually
+     been implemented yet. Added `src/pointcloud/outlier_removal.py`.
+  4. Building that module surfaced a **second** real bug before it ever reached
+     production use: an initial version combined statistical removal with a
+     "2x median nearest-neighbor distance" auto-radius for radius-based removal, and
+     that combination rejected 98.9% of points on this real (non-uniform-density)
+     point cloud — real SfM clouds have dense clusters at well-observed surfaces and
+     sparser coverage elsewhere, and a single global radius derived from the (locally
+     dense) median treated legitimate sparse regions as outliers. Statistical removal
+     *alone* (no radius filtering) correctly identified and removed exactly the 3 true
+     outliers and nothing else. Fixed by making radius filtering opt-in
+     (`apply_radius_filter=False` by default) rather than always-on.
+  5. With outlier removal applied before alignment: extent became a sane 120m x 52m,
+     orthomosaic coverage jumped to **96.7%**, and the output image is now visually
+     coherent (checkerboard ground pattern clearly visible, some blur/distortion near
+     building footprints — expected, matches the documented flat-ground-assumption
+     limitation for elevated features).
+
+This whole investigation is a good example of the "verify against the simplest direct
+check, don't stop at the first plausible explanation" lesson from the Phase 3 entry
+above, applied a second time (and this time going deep enough to find two real,
+previously-nonexistent pipeline gaps — outlier removal wasn't implemented at all).
+
+Assumptions made: none new beyond Phase 2/3/5's.
+Deviations from ROADMAP.md/ARCHITECTURE.md: none — outlier removal was already
+specified in ARCHITECTURE.md's pipeline diagram; it just hadn't been built yet before
+this real-data test surfaced the need concretely.
+Issues encountered: all covered and fixed above.
+

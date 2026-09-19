@@ -80,6 +80,28 @@ def test_align_geometry_to_gps_recovers_known_scale():
     assert result.n_gps_correspondences == n
 
 
+def test_rederive_pose_for_aligned_world_projects_identically():
+    from geo.scale_alignment import _rederive_pose_for_aligned_world
+
+    rng = np.random.default_rng(0)
+    r_orig = np.linalg.qr(rng.normal(size=(3, 3)))[0]
+    t_orig = rng.normal(size=3)
+    pose = CameraPose(frame_path="f.jpg", rotation=r_orig, translation=t_orig, intrinsics=np.eye(3))
+
+    scale = 3.7
+    rot = np.linalg.qr(rng.normal(size=(3, 3)))[0]
+    t = rng.normal(size=3)
+
+    x_orig = rng.normal(size=3)
+    x_aligned = scale * rot @ x_orig + t
+
+    x_cam_direct = r_orig @ x_orig + t_orig
+    new_pose = _rederive_pose_for_aligned_world(pose, scale, rot, t)
+    x_cam_via_aligned = new_pose.rotation @ x_aligned + new_pose.translation
+
+    np.testing.assert_allclose(x_cam_direct, x_cam_via_aligned, atol=1e-9)
+
+
 def test_align_geometry_to_gps_raises_on_too_few_matches():
     poses = [
         CameraPose(frame_path="only_one.jpg", rotation=np.eye(3), translation=np.zeros(3), intrinsics=np.eye(3))

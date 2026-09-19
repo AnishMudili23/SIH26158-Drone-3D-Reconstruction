@@ -30,6 +30,32 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from common.geometry_interface import CameraPose  # noqa: E402
 
 
+def estimate_ground_z_ref(
+    points_xyz: np.ndarray,
+    class_names: list[str] | None = None,
+    ground_like_classes: tuple[str, ...] = ("Road", "Background clutter"),
+) -> float:
+    """Picks a representative flat-ground elevation for the orthomosaic homography.
+
+    Using the median of *all* points is a bad default when the cloud is dominated by
+    elevated features (buildings, trees) rather than ground — confirmed by direct
+    experiment: on a real reconstruction that was ~95% building points, the naive
+    all-point median landed near roof height, so nearly every camera's ground-plane
+    homography projected outside its actual image bounds, and the resulting
+    orthomosaic was almost entirely black (0.7% coverage) except a sliver where a
+    camera happened to be pointed steeply enough to still intersect that (wrong)
+    plane. Restricting to the same ground-like class proxy DSM/DTM export already uses
+    (Road, Background clutter) fixes this. Falls back to the all-point median only if
+    no ground-like points exist (better than crashing, though callers should treat
+    that fallback result with suspicion).
+    """
+    if class_names is not None:
+        ground_mask = np.array([c in ground_like_classes for c in class_names])
+        if ground_mask.any():
+            return float(np.median(points_xyz[ground_mask, 2]))
+    return float(np.median(points_xyz[:, 2]))
+
+
 def ground_plane_homography(pose: CameraPose, z_ref: float) -> np.ndarray:
     r, t, k = pose.rotation, pose.translation, pose.intrinsics
     plane_basis = np.column_stack([r[:, 0], r[:, 1], r[:, 2] * z_ref + t])
