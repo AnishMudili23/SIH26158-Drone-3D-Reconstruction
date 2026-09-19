@@ -544,3 +544,44 @@ frame-0-anchored origin), consistent with the building-height spread. DTM 92.2% 
 cells (only 1,096 Road-tagged points define it) — expected given the sparse cloud's
 limited ground-class coverage, not a bug.
 
+---
+
+## Phase 4 — Web Viewer (MVP)
+Status: DONE
+Finished: 2026-09-20 00:35
+
+Definition of done, checked:
+  - Open a browser, load a model, click two points, see a distance number that's
+    roughly correct: PASS, actually driven and screenshotted, not just launched.
+
+Built `src/viewer/index.html`: a single self-contained page (Three.js via CDN import
+map, per TECH_STACK.md's "speed over polish" MVP guidance), loading a `.glb` mesh
+(converted from Phase 2's real `meshed-poisson.ply` via Open3D, vertex positions scaled
+by Phase 3's recovered scale factor so on-screen distances are in real meters) with
+orbit controls and click-to-measure (raycasting + `Vector3.distanceTo`).
+
+Testing note: `chromium-cli` (the harness's usual browser-driving tool) wasn't
+available in this Windows environment. Used system-installed Chrome directly instead —
+`chrome.exe --headless=new --screenshot` for a static render check, then a small
+one-off CDP (Chrome DevTools Protocol) script (`scripts/cdp_test_viewer.py`, driven over
+a raw websocket since `playwright`/`chromium-cli` weren't installed) to actually
+simulate two clicks and confirm the interaction, not just the initial render — per the
+"launching with no interaction proves the entrypoint resolves, that's not running the
+app" guidance. Real bug caught this way: the mesh initially failed to render at all
+(page loaded, bounding box computed correctly, but nothing visible) — diagnosed via an
+in-page debug readout (mesh count/vertex count/material info) rather than guessing, and
+fixed by forcing `THREE.DoubleSide` on the loaded material (Open3D's glTF export and/or
+the Poisson mesh's normal orientation didn't match Three.js's default single-sided
+backface-culling assumption). After the fix: real screenshot confirms a real, textured
+mesh renders, two clicks produce a real measurement ("Distance: 6.06 m") with visible
+marker spheres and a connecting line.
+
+Assumptions made:
+  - The demo mesh is manually scaled by a scale factor computed in a separate ad-hoc
+    script run, not wired into an automated export step yet — a real "export the final
+    scaled model for the viewer" step belongs in a future Phase 7/8 orchestrator, not
+    invented here as scope creep.
+Deviations: built after Phase 5/6/7 instead of before (see that entry) — otherwise none.
+Issues encountered: covered above (missing chromium-cli, mesh invisibility bug) — both
+resolved, not worked around superficially.
+

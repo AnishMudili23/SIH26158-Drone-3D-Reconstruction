@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SIH26158 — Reconstruction Viewer (Phase 4 MVP)</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1a1a; font-family: sans-serif; }
+  #canvas-container { width: 100%; height: 100%; }
+  #hud {
+    position: absolute; top: 10px; left: 10px; color: #eee; background: rgba(0,0,0,0.6);
+    padding: 10px 14px; border-radius: 6px; font-size: 13px; line-height: 1.5; max-width: 340px;
+  }
+  #hud b { color: #7ec8ff; }
+  #status { color: #9f9; }
+  .warn { color: #fc6; }
+  button {
+    background: #2a5; color: white; border: none; padding: 4px 10px; border-radius: 4px;
+    cursor: pointer; margin-top: 4px;
+  }
+</style>
+</head>
+<body>
+<div id="canvas-container"></div>
+<div id="hud">
+  <div><b>SIH26158 — Phase 4 MVP Viewer</b></div>
+  <div id="status">Loading model…</div>
+  <div>Click two points on the mesh to measure distance.</div>
+  <div id="measurement"></div>
+  <div id="debug" style="display:none;"></div>
+  <button id="reset-btn">Reset measurement</button>
+  <div class="warn" style="margin-top:8px;">
+    Confidence/coverage overlay not yet available (Phase 6 exists in the pipeline but
+    isn't wired into this viewer yet — see PROGRESS.md). Treat this mesh as an
+    unverified reconstruction, not ground truth, per project policy.
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+
+const container = document.getElementById("canvas-container");
+const statusEl = document.getElementById("status");
+const measurementEl = document.getElementById("measurement");
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1a1a);
+
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 5000);
+camera.position.set(20, 20, 20);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+container.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+dirLight.position.set(50, 80, 50);
+scene.add(dirLight);
+scene.add(new THREE.GridHelper(200, 40, 0x444444, 0x2a2a2a));
+scene.add(new THREE.AxesHelper(5));
+
+let meshRoot = null;
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+const clickPoints = [];
+const markers = [];
+let measureLine = null;
+
+function clearMeasurement() {
+  clickPoints.length = 0;
+  markers.forEach(m => scene.remove(m));
+  markers.length = 0;
+  if (measureLine) { scene.remove(measureLine); measureLine = null; }
+  measurementEl.textContent = "";
+}
+document.getElementById("reset-btn").addEventListener("click", clearMeasurement);
+
+function addMarker(point) {
+  const geo = new THREE.SphereGeometry(0.15, 16, 16);
+  const mat = new THREE.MeshBasicMaterial({ color: 0xff3333 });
+  const sphere = new THREE.Mesh(geo, mat);
+  sphere.position.copy(point);
+  scene.add(sphere);
+  markers.push(sphere);
+}
+
+function onPointerClick(event) {
+  if (!meshRoot) return;
+  pointer.x = (event.clientX / window.innerWidth) * 2 - 1;
+  pointer.y = -(event.clientY / window.innerHeight) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+  const intersects = raycaster.intersectObject(meshRoot, true);
+  if (intersects.length === 0) return;
+
+  const point = intersects[0].point;
+  if (clickPoints.length >= 2) clearMeasurement();
+  clickPoints.push(point.clone());
+  addMarker(point);
+
+  if (clickPoints.length === 2) {
+    const [a, b] = clickPoints;
+    const dist = a.distanceTo(b);
+    const geo = new THREE.BufferGeometry().setFromPoints([a, b]);
+    const mat = new THREE.LineBasicMaterial({ color: 0xffff00 });
+    measureLine = new THREE.Line(geo, mat);
+    scene.add(measureLine);
+    measurementEl.innerHTML = `<b>Distance: ${dist.toFixed(2)} m</b>`;
+  }
+}
+renderer.domElement.addEventListener("click", onPointerClick);
+
+const loader = new GLTFLoader();
+loader.load(
+  "mesh_scaled.glb",
+  (gltf) => {
+    meshRoot = gltf.scene;
+    scene.add(meshRoot);
+
+    let meshCount = 0, vertCount = 0, matInfo = [];
+    meshRoot.traverse((obj) => {
+      if (obj.isMesh) {
+        meshCount++;
+        vertCount += obj.geometry.attributes.position ? obj.geometry.attributes.position.count : 0;
+        obj.material.side = THREE.DoubleSide;
+        matInfo.push({
+          hasVertexColors: obj.geometry.attributes.color !== undefined,
+          matVertexColors: obj.material.vertexColors,
+          matType: obj.material.type,
+          visible: obj.visible,
+        });
+      }
+    });
+    console.log("DEBUG mesh count:", meshCount, "vert count:", vertCount, JSON.stringify(matInfo));
+    document.getElementById("debug").textContent =
+      `meshes=${meshCount} verts=${vertCount} mats=${JSON.stringify(matInfo)}`;
+
+    const box = new THREE.Box3().setFromObject(meshRoot);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    controls.target.copy(center);
+    camera.position.copy(center).add(new THREE.Vector3(maxDim, maxDim, maxDim));
+    camera.near = maxDim / 100;
+    camera.far = maxDim * 100;
+    camera.updateProjectionMatrix();
+    controls.update();
+
+    statusEl.textContent = `Loaded (extent ~${size.x.toFixed(1)} x ${size.y.toFixed(1)} x ${size.z.toFixed(1)} m)`;
+  },
+  undefined,
+  (err) => {
+    statusEl.textContent = "Failed to load model — see console.";
+    console.error(err);
+  }
+);
+
+window.addEventListener("resize", () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>
