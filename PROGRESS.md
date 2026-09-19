@@ -274,20 +274,24 @@ Issues encountered:
 ---
 
 ## Phase 2 — first real COLMAP run (downloads finished mid-session)
-Status: DONE (sparse reconstruction only; dense/mesh not yet run — see below)
+Status: DONE (sparse AND dense/mesh both completed — see dense addendum below)
 Started: 2026-09-19 20:09
-Finished: 2026-09-19 20:24 (across two attempts, see Issues)
+Finished: 2026-09-19 20:24 (sparse, across two attempts, see Issues); dense/mesh
+finished 2026-09-19 23:57 (840.1s, ~14 min)
 
 COLMAP (v4.2.0, official `colmap-x64-windows-cuda.zip` release), Open3D, and rasterio
 all finished downloading/extracting. Immediately ran the real `ColmapBackend` wrapper
 against a real (if synthetic) multi-view image set for the first time this session.
 
 Definition of done, checked:
-  - Real .ply/.obj output from a real test video, viewable in a generic viewer: PARTIAL.
-    Sparse reconstruction succeeded (below); dense MVS + Poisson mesh
-    (`run_dense_reconstruction`) not yet run — sparse-only was prioritized first to
-    validate the wrapper/parser before spending the (much longer) dense-MVS time
-    budget. Next action.
+  - Real .ply/.obj output from a real test video, viewable in a generic viewer: PASS.
+    Sparse reconstruction succeeded first (below); dense MVS + Poisson mesh
+    (`run_dense_reconstruction`) run afterward against the corrected (non-degenerate
+    trajectory) scene — completed in 840.1s (~14 min): `dense/fused.ply` (5.2MB dense
+    point cloud) and `dense/meshed-poisson.ply` (852KB). Verified the mesh is a genuine,
+    well-formed PLY by parsing its header directly: 17,721 vertices, 32,228 faces,
+    vertex colors present (binary_little_endian format) — a real textured mesh, not an
+    empty or corrupt file.
 
 What was tested and how (no UAVid access this session — see Phase 1 entry — so built a
 purpose-made synthetic multi-view dataset instead of a real drone video):
