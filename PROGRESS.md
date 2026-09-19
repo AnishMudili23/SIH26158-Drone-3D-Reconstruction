@@ -322,16 +322,30 @@ purpose-made synthetic multi-view dataset instead of a real drone video):
     `tests/test_alignment.py`). **First run gave a nonsensical-looking result**: GPS-fit
     residual was small (2.3m, consistent with the 1.5m noise injected) but comparing the
     aligned camera centers to the *noiseless* ground truth gave a huge, nearly-constant
-    ~85m error across every frame. Diagnosed (not assumed) by computing an SVD of the
-    recovered camera centers: cross-track spread was ~0.07% and ~0.02% of the
-    along-track spread — the flight path in the first scene version was almost
-    perfectly straight, which makes the Umeyama similarity fit's rotation-recovery
-    genuinely degenerate (rotation about the line's own axis is unconstrained by
-    collinear points). This is a real geometric fact, not an alignment-code bug — Phase
-    0's own synthetic flight path already used a gentle S-curve for exactly this reason,
-    and this new scene generator hadn't matched that. Fixed by adding the same kind of
-    lateral (Y) sine wobble + altitude wobble to `make_flight_poses()`. Re-running COLMAP
-    on the corrected scene now (in progress at time of writing — see next entry).
+    ~85m error across every frame. Initially (and, in hindsight, wrongly) diagnosed this
+    as a degenerate near-collinear flight path via SVD of the recovered camera centers
+    (cross-track spread was ~0.07%/~0.02% of along-track spread in the first scene
+    version) and "fixed" it by adding lateral/altitude wobble to the flight path,
+    matching Phase 0's own synthetic trajectory shape. **That fix was a red herring**:
+    re-running COLMAP on the wobbled path (642.9s, 60/60 frames, 23,013 points; SVD
+    confirmed healthy spread this time, ratios 0.106/0.035) reproduced the *exact same*
+    ~85m error. Root-caused properly this time by printing individual (true, aligned)
+    position pairs: `align_geometry_to_gps`'s internal ENU frame is anchored at
+    `fixes[0]` (see `gps_fixes_to_enu`: `origin = fixes[0]`), while the ground-truth JSON
+    expresses positions in the synthetic scene's own world origin — two different
+    tangent-plane anchor points, related by a pure translation (Earth curvature is
+    negligible at ~150m scale). The reported ~85m matched `sqrt(75^2 + 40^2)` almost
+    exactly: the distance from the scene's world origin to frame_0000's own position —
+    i.e., the "error" was just the (correct, expected) coordinate-frame offset, not a
+    reconstruction or alignment defect. **This was a bug in the test script's
+    ground-truth comparison, not in `colmap_backend.py` or `scale_alignment.py`.** Fixed
+    by re-anchoring both point sets at frame 0 before computing error. Result after the
+    real fix: mean error **0.948m**, max **1.901m** — consistent with the 1.5m GPS noise
+    injected, exactly as expected. The flight-path wobble fix was kept anyway (real
+    flights always have some wobble; it doesn't hurt), but it was not the actual fix.
+    Lesson logged explicitly: the first (SVD-based) diagnosis was a plausible-sounding
+    but incorrect explanation reached without verifying against the simplest direct
+    check (printing a few actual position pairs) — that check should have come first.
 
 Assumptions made:
   - Synthetic-scene "GPS fixes" for the Phase 3 integration test are the scene's known
@@ -344,6 +358,27 @@ Deviations from ROADMAP.md/ARCHITECTURE.md: none (dense reconstruction/mesh is P
 — dense MVS is next).
 
 Issues encountered: covered above (Open3D unreliability, COLMAP 4.2.0 flag renames,
-degenerate-trajectory alignment finding). All root-caused and fixed/worked around, not
-papered over.
+a mistaken initial diagnosis and then the real root cause of the ~85m test-comparison
+error). All root-caused and fixed/worked around, not papered over.
+
+---
+
+## Phase 3 — confirmed working end-to-end against real COLMAP output
+Status: DONE (validated on synthetic-scene data; real GPS log validation still pending
+real flight data, same caveat as every other phase this session)
+Finished: 2026-09-19 20:38
+
+Definition of done, checked:
+  - Model coordinates map to real-world GPS positions, scale validated against known
+    ground truth: PASS. After fixing the test-script coordinate-anchoring bug (above),
+    `scripts/test_phase3_integration.py` shows the aligned COLMAP reconstruction matches
+    the synthetic scene's true (noiseless) camera positions to **mean 0.948m, max
+    1.901m** error, consistent with the 1.5m GPS noise injected into the test's fake
+    fixes. This is now a real (if synthetic-scene) end-to-end confirmation of Phase 2's
+    COLMAP output correctly feeding Phase 3's GPS/ENU alignment.
+
+PyTorch also finished installing during this stretch (`torch==2.5.1+cu121`,
+`torch.cuda.is_available() == True` confirmed) — Phase 0's GPU check and Phase 1's
+segmentation/masking, and Phase 5's depth fusion, can now actually run rather than
+gracefully skipping. Re-running those for real is the next action.
 

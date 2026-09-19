@@ -80,14 +80,29 @@ def run(colmap_work_dir: str, ground_truth_json: str, gps_noise_std_m: float = 1
 
     # Direct ground-truth comparison (independent of the GPS-fix noise injected above):
     # compare the ALIGNED camera centers against the true, noiseless camera positions.
-    true_positions, aligned_positions = [], []
-    for pose, center in zip(poses, result.camera_centers_enu):
+    #
+    # IMPORTANT: align_geometry_to_gps's ENU frame is anchored at `fixes[0]` (see
+    # gps_fixes_to_enu: `origin = fixes[0]`), NOT at the synthetic scene's own world
+    # origin (0,0,0) that gt_by_frame's coordinates are expressed in. These are two
+    # tangent planes with different anchor points (though ~the same orientation, since
+    # Earth curvature is negligible over ~150m) — comparing raw coordinates directly
+    # gives a large but entirely spurious constant offset equal to the first frame's own
+    # true position (confirmed: an earlier version of this comparison showed a ~85m
+    # "error" that exactly matched sqrt(75^2 + 40^2), the distance from the scene origin
+    # to frame_0000's position — not a real reconstruction/alignment error at all). Fix:
+    # re-anchor both point sets at the first matched frame before comparing.
+    true_positions = []
+    for pose in poses:
         name = Path(pose.frame_path).name
         if name in gt_by_frame:
             true_positions.append(gt_by_frame[name])
     true_positions = np.array(true_positions)
-    errors = np.linalg.norm(result.camera_centers_enu - true_positions, axis=1)
-    print(f"Error vs. NOISELESS ground truth: mean={errors.mean():.3f}m, max={errors.max():.3f}m")
+    true_positions_reanchored = true_positions - true_positions[0]
+    aligned_reanchored = result.camera_centers_enu - result.camera_centers_enu[0]
+
+    errors = np.linalg.norm(aligned_reanchored - true_positions_reanchored, axis=1)
+    print(f"Error vs. NOISELESS ground truth (both re-anchored at frame 0): "
+          f"mean={errors.mean():.3f}m, max={errors.max():.3f}m")
     return result
 
 
