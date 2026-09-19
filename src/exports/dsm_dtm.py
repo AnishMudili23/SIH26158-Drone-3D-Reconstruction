@@ -50,15 +50,18 @@ def grid_elevation(
     # Row 0 = north edge, so flip the row index (y increases north but row increases south).
     row_idx = np.clip((n_rows - 1) - ((y - y_min) / cell_size_m).astype(int), 0, n_rows - 1)
 
-    grid = np.full((n_rows, n_cols), np.nan, dtype=np.float32)
+    # np.maximum.at/np.minimum.at propagate NaN forever if the accumulator starts as
+    # NaN (max(nan, x) is nan under IEEE semantics) — start from +-inf instead and
+    # convert untouched (still-infinite) cells to NaN afterwards.
     if agg == "max":
-        np.maximum.at(grid, (row_idx, col_idx), z)
+        grid_filled = np.full((n_rows, n_cols), -np.inf, dtype=np.float32)
+        np.maximum.at(grid_filled, (row_idx, col_idx), z)
     elif agg == "min":
         grid_filled = np.full((n_rows, n_cols), np.inf, dtype=np.float32)
         np.minimum.at(grid_filled, (row_idx, col_idx), z)
-        grid = np.where(np.isfinite(grid_filled), grid_filled, np.nan)
     else:
         raise ValueError(f"Unknown agg: {agg}")
+    grid = np.where(np.isfinite(grid_filled), grid_filled, np.nan)
 
     return grid, float(x_min), float(y_max)
 

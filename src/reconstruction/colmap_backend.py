@@ -218,7 +218,7 @@ class ColmapBackend:
             "--image_path", str(image_dir),
             "--ImageReader.camera_model", "SIMPLE_RADIAL",
             "--ImageReader.single_camera", "1",
-            "--SiftExtraction.use_gpu", gpu_flag,
+            "--FeatureExtraction.use_gpu", gpu_flag,
         ]
         if mask_dir is not None:
             feature_extractor_cmd += ["--ImageReader.mask_path", str(mask_dir)]
@@ -227,7 +227,7 @@ class ColmapBackend:
         _run([
             self.colmap_bin, "sequential_matcher",
             "--database_path", str(db_path),
-            "--SiftMatching.use_gpu", gpu_flag,
+            "--FeatureMatching.use_gpu", gpu_flag,
             "--SequentialMatching.overlap", "10",
         ])
 
@@ -244,6 +244,10 @@ class ColmapBackend:
                 f"COLMAP mapper produced no reconstruction at {model_0} — "
                 "check frame overlap/quality; sparse SfM may have failed to register enough images."
             )
+        # NOTE: if frame overlap/quality is poor, `mapper` can produce multiple
+        # disconnected components (sparse/0, sparse/1, ...). We only use component 0
+        # (the largest, by COLMAP's own convention) — a genuinely fragmented flight
+        # path would need per-component handling this MVP doesn't do yet.
 
         _run([
             self.colmap_bin, "model_converter",
@@ -308,16 +312,11 @@ class ColmapBackend:
         image_dir = image_dirs.pop()
 
         sparse_txt_dir = self.run_sparse_reconstruction(image_dir, work_dir, mask_dir=mask_dir)
-
-        images = _read_images_txt(sparse_txt_dir / "images.txt")
-        cameras = _read_cameras_txt(sparse_txt_dir / "cameras.txt")
-        points_xyz, points_rgb, track_len, _reproj_error, _, _point_ids = _read_points3d_txt(
-            sparse_txt_dir / "points3D.txt"
-        )
+        model = read_sparse_text_model(sparse_txt_dir)
 
         poses = []
-        for image_id, img in images.items():
-            camera = cameras[img["camera_id"]]
+        for image_id, img in model["images"].items():
+            camera = model["cameras"][img["camera_id"]]
             r = _quat_to_rotmat(*img["quat_wxyz"])
             t = np.array(img["translation"])
             k = _camera_intrinsics(camera)
@@ -325,9 +324,9 @@ class ColmapBackend:
 
         return GeometryEstimate(
             poses=poses,
-            points_xyz=points_xyz,
-            points_rgb=points_rgb,
-            points_confidence=track_len,  # track length = # frames observing the point
+            points_xyz=model["points_xyz"],
+            points_rgb=model["points_rgb"],
+            points_confidence=model["track_len"],  # track length = # frames observing the point
             backend_name=self.name,
             is_metric_scale=False,
         )
