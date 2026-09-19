@@ -149,3 +149,125 @@ Issues encountered:
     re-verify this phase's DoD fully once torch lands.
   - UAVid dataset gated behind manual registration — see Assumptions above.
 
+---
+
+## Phase 2/3/5/6/7 — Scaffolding progress (written while waiting on slow downloads)
+Status: IN PROGRESS (code written + unit-validated with synthetic data; not yet run
+end-to-end against a real COLMAP reconstruction — COLMAP binary + PyTorch + Open3D +
+rasterio were still downloading over this machine's slow connection at time of writing)
+
+This entry covers work done opportunistically while large background downloads
+(PyTorch CUDA wheel ~2.5GB, COLMAP Windows CUDA release ~380MB, Open3D, rasterio) were
+in progress, rather than sitting idle. Everything below is written and individually
+validated against synthetic inputs using the same "prove the math independently of the
+real dependency" approach as Phase 0; nothing here has yet been run against a real
+video/reconstruction.
+
+**Phase 2 (COLMAP baseline):**
+  - `src/common/geometry_interface.py` — the swappable `estimate_geometry()` contract
+    (CLAUDE.md constraint #1). `get_geometry_backend()` is the only place that
+    knows concrete backend classes exist; requesting "vggt" raises NotImplementedError
+    with a clear message rather than silently falling back, so the swap point is
+    unambiguous when Phase 9 eventually implements it.
+  - `src/reconstruction/colmap_backend.py` — COLMAP CLI wrapper (feature_extractor ->
+    sequential_matcher [not exhaustive — deliberate, matches PRD.md's single continuous
+    flight] -> mapper -> model_converter to TXT -> own text-format parser, no pycolmap
+    dependency). Parses images.txt (poses + 2D-3D correspondences), cameras.txt
+    (intrinsics per COLMAP camera model), points3D.txt (xyz, rgb, track length,
+    reprojection error). Dense path: image_undistorter -> patch_match_stereo ->
+    stereo_fusion -> poisson_mesher.
+  - COLMAP binary resolution: `COLMAP_BIN` env var -> `tools/` extracted release ->
+    system PATH. Downloaded the official `colmap-x64-windows-cuda.zip` (v4.2.0, via
+    `gh release download`) into `tools/` (gitignored — binary, not source).
+  - Dynamic-object masking wired in: `src/frame_processing/masking.py` converts UAVid
+    class masks into COLMAP's `--ImageReader.mask_path` convention, masking out Moving
+    car/Human pixels before feature extraction (ARCHITECTURE.md requirement).
+  - `src/reconstruction/run_phase2.py` — orchestrator tying Phase 1 output
+    (kept_frames_dir + masks_dir) into COLMAP sparse+dense+mesh. NOT YET RUN against
+    real data (blocked on COLMAP binary finishing download).
+  - Real bug caught and fixed during writing (not by running, by re-reading my own
+    code): `run_phase2.py` originally derived the dense-reconstruction's sparse-model
+    path incorrectly (passed the TEXT export dir where COLMAP's `image_undistorter`
+    needs the BINARY model dir). Fixed to reference `sparse_work_dir/"sparse"/"0"`
+    explicitly.
+
+**Phase 3 (scale + geo alignment):**
+  - `src/common/alignment.py` — Umeyama similarity alignment, extracted out of Phase
+    0's `scale_recovery.py` into a shared module so Phase 0's validated math is
+    *literally* the same code Phase 3 runs, not a reimplementation that could drift.
+    Re-verified Phase 0's script still produces identical numbers after the refactor.
+  - `src/geo/scale_alignment.py` — GPS lat/lon/alt -> local ENU via ECEF + rotation
+    (textbook derivation). First attempt used pyproj's `+proj=topocentric` pipeline,
+    which threw a "mismatched units" ProjError on this pyproj/proj version — switched
+    to manual ECEF conversion + rotation matrix, which round-trips to ~1e-9 error
+    (verified). Full `align_geometry_to_gps()` (COLMAP poses + GPS fixes -> metric,
+    georeferenced point cloud) verified end-to-end against synthetic
+    SfM-poses-plus-known-scale-plus-real-GPS-coordinates data: recovered scale factor
+    matched ground truth to 1e-11 relative error, alignment residual ~1e-9m.
+
+**Phase 5 (depth fusion) — written, not yet run (needs PyTorch):**
+  - `src/depth_fusion/depth_anything.py` — Depth Anything V2 Small
+    (`depth-anything/Depth-Anything-V2-Small-hf`, ~25M params, explicitly the
+    "avoid the largest checkpoint" choice from TECH_STACK.md) via HF transformers,
+    lazy-loaded same as the segmentation module.
+  - `src/depth_fusion/fuse_depth.py` — per-frame relative-depth -> metric-depth
+    scale+shift fit against COLMAP's own sparse points visible in that frame (least
+    squares), then backprojects the whole depth map into world-space dense points.
+    Validated the fit + backprojection math synthetically: with a real caught bug in my
+    *test script* (inconsistent pixel rounding between generating synthetic sparse
+    correspondences and the module's own lookup) which produced garbage-looking
+    results at first; after fixing the test to round consistently, the fit recovered
+    injected ground-truth scale/shift parameters to machine precision (~1e-15
+    residual). The module code itself was correct throughout — this was a test-authoring
+    bug, logged here because it's a good example of why synthetic validation needs its
+    own care.
+
+**Phase 6 (confidence/coverage) — written and unit-tested with synthetic data:**
+  - `src/confidence/confidence_report.py` — per-point confidence tiers (high/medium/low)
+    from COLMAP's own track-length + reprojection-error (both signals must agree for
+    "high," conservative-by-design per CLAUDE.md constraint #5), per-class breakdown,
+    and a 2D region grid (for Phase 8's overlay) that leaves zero-point cells as NaN
+    ("genuinely unobserved," not silently interpolated). Ran against synthetic random
+    points/classes — produces sane per-class and grid outputs.
+  - Tier thresholds (track_len >= 5 & reproj <= 1.0px = high; >= 3 & <= 2.0px = medium)
+    are starting defaults, explicitly not derived from a specific paper — flagged as
+    needing retuning against a real reconstruction's actual error distribution.
+
+**Phase 7 (class tagging + DSM/DTM + orthomosaic) — written, DSM/DTM blocked on rasterio
+install, orthomosaic math validated synthetically, class tagging not yet run:**
+  - `src/exports/class_tagging.py` — projects each COLMAP point onto its own track's
+    observing frames (not a blind nearest-camera heuristic) and reads the UAVid class
+    at that pixel from Phase 1's segmentation masks.
+  - `src/exports/dsm_dtm.py` — DSM = max-Z per grid cell (any class); DTM = min-Z per
+    cell restricted to ground-like classes (Road, Background clutter — UAVid has no
+    separate bare-earth class), NaN where no ground-like point exists in a cell rather
+    than interpolating a guess. CRS: treats the Phase 3 ENU frame as locally equivalent
+    to the UTM zone containing the flight origin (sub-cm divergence at single-flight
+    scale — documented approximation, not exact reprojection). BLOCKED on `rasterio`
+    finishing its background install to actually run.
+  - `src/exports/orthomosaic.py` — analytic per-frame ground-plane homography (flat-
+    ground assumption at a representative elevation) composed with a world->ortho-pixel
+    affine map, fed directly to `cv2.warpPerspective` — avoids needing generic
+    feature-based stitching since camera poses are already known from COLMAP.
+    Average-blends overlapping frames. Verified the homography derivation synthetically
+    against a hand-computed nadir-camera case (principal point and per-meter pixel
+    shift both matched analytically-expected values exactly).
+
+Assumptions made (Phase 2/3/5/6/7, in addition to Phase 0/1's):
+  - DTM's "ground-like classes" = {Road, Background clutter} is a pragmatic proxy —
+    UAVid's 8 classes don't include a dedicated bare-earth/terrain class distinct from
+    these. Revisit if a better ground indicator becomes available.
+  - Confidence tier thresholds are unvalidated starting defaults (see Phase 6 above).
+  - Orthomosaic assumes a single flat ground elevation (z_ref) for the whole scene;
+    real terrain relief will show as perspective distortion, same limitation as most
+    fast orthomosaic tools without a dedicated ortho-rectification pass against a DEM.
+
+Deviations from ROADMAP.md/ARCHITECTURE.md: none.
+
+Issues encountered:
+  - This machine's slow internet connection (see Phase 0/1 entries) meant PyTorch,
+    COLMAP, Open3D, and rasterio were all still mid-download well into this session.
+    Used the wait productively (Phase 2/3/5/6/7 code + synthetic validation) rather
+    than blocking, but **none of Phase 2/5/6/7 has been run end-to-end against a real
+    reconstruction yet** — that is the very next action once downloads finish.
+

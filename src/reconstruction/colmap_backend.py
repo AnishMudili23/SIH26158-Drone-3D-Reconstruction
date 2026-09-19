@@ -68,11 +68,21 @@ def _read_images_txt(path: Path) -> dict[int, dict]:
         tx, ty, tz = map(float, parts[5:8])
         camera_id = int(parts[8])
         name = parts[9]
+
+        # Line 2: POINTS2D[] as (X, Y, POINT3D_ID) triples, POINT3D_ID == -1 if unmatched.
+        points2d_parts = lines[i + 1].split()
+        points2d = []
+        for j in range(0, len(points2d_parts), 3):
+            x, y, point3d_id = float(points2d_parts[j]), float(points2d_parts[j + 1]), int(points2d_parts[j + 2])
+            if point3d_id != -1:
+                points2d.append((x, y, point3d_id))
+
         images[image_id] = {
             "quat_wxyz": (qw, qx, qy, qz),
             "translation": (tx, ty, tz),
             "camera_id": camera_id,
             "name": name,
+            "points2d": points2d,  # [(x, y, point3D_id), ...] — 2D-3D correspondences
         }
     return images
 
@@ -91,20 +101,41 @@ def _read_cameras_txt(path: Path) -> dict[int, dict]:
     return cameras
 
 
-def _read_points3d_txt(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    xyz, rgb, track_len = [], [], []
+def _read_points3d_txt(
+    path: Path,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict[int, np.ndarray], list[int]]:
+    """Returns (xyz, rgb, track_len, reprojection_error, id_to_xyz, point_ids).
+
+    id_to_xyz is keyed by COLMAP's POINT3D_ID (not a dense array index), needed to
+    resolve per-image 2D-3D correspondences for depth fusion (fuse_depth.py).
+    reprojection_error is COLMAP's own mean track reprojection error per point (pixels)
+    — a direct per-point confidence signal used by Phase 6's confidence module.
+    point_ids is the POINT3D_ID for each row of xyz/rgb/track_len/reprojection_error, in
+    the same order, so callers (e.g. class_tagging.py) can align rows back to tracks.
+    """
+    xyz, rgb, track_len, reproj_error, point_ids = [], [], [], [], []
+    id_to_xyz: dict[int, np.ndarray] = {}
     for line in path.read_text().splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
         parts = line.split()
-        xyz.append(list(map(float, parts[1:4])))
+        point3d_id = int(parts[0])
+        point_xyz = list(map(float, parts[1:4]))
+        xyz.append(point_xyz)
         rgb.append(list(map(int, parts[4:7])))
+        reproj_error.append(float(parts[7]))
         n_track_elems = (len(parts) - 8) // 2
         track_len.append(n_track_elems)
+        id_to_xyz[point3d_id] = np.array(point_xyz)
+        point_ids.append(point3d_id)
     if not xyz:
-        return np.zeros((0, 3)), np.zeros((0, 3), dtype=np.uint8), np.zeros((0,))
-    return np.array(xyz), np.array(rgb, dtype=np.uint8), np.array(track_len, dtype=np.float32)
+        return (np.zeros((0, 3)), np.zeros((0, 3), dtype=np.uint8), np.zeros((0,)),
+                np.zeros((0,)), {}, [])
+    return (
+        np.array(xyz), np.array(rgb, dtype=np.uint8), np.array(track_len, dtype=np.float32),
+        np.array(reproj_error, dtype=np.float32), id_to_xyz, point_ids,
+    )
 
 
 def _quat_to_rotmat(qw: float, qx: float, qy: float, qz: float) -> np.ndarray:
@@ -130,6 +161,28 @@ def _camera_intrinsics(camera: dict) -> np.ndarray:
     return np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
 
 
+def read_sparse_text_model(sparse_txt_dir: str | Path) -> dict:
+    """Public reader for a COLMAP text-format sparse model — shared by ColmapBackend
+    and downstream stages (e.g. depth_fusion/fuse_depth.py) that need 2D-3D
+    correspondences, not just the final GeometryEstimate."""
+    sparse_txt_dir = Path(sparse_txt_dir)
+    images = _read_images_txt(sparse_txt_dir / "images.txt")
+    cameras = _read_cameras_txt(sparse_txt_dir / "cameras.txt")
+    points_xyz, points_rgb, track_len, reproj_error, id_to_xyz, point_ids = _read_points3d_txt(
+        sparse_txt_dir / "points3D.txt"
+    )
+    return {
+        "images": images,
+        "cameras": cameras,
+        "points_xyz": points_xyz,
+        "points_rgb": points_rgb,
+        "track_len": track_len,
+        "reprojection_error": reproj_error,
+        "point3d_id_to_xyz": id_to_xyz,
+        "point_ids": point_ids,
+    }
+
+
 class ColmapBackend:
     name = "colmap"
 
@@ -137,9 +190,18 @@ class ColmapBackend:
         self.colmap_bin = colmap_bin or find_colmap_binary()
         self.use_gpu = use_gpu
 
-    def run_sparse_reconstruction(self, image_dir: str | Path, work_dir: str | Path) -> Path:
+    def run_sparse_reconstruction(
+        self, image_dir: str | Path, work_dir: str | Path, mask_dir: str | Path | None = None
+    ) -> Path:
         """feature_extractor -> sequential_matcher -> mapper -> export as text.
-        Returns the path to the exported text sparse model directory."""
+        Returns the path to the exported text sparse model directory.
+
+        mask_dir: optional per-image mask directory (ARCHITECTURE.md: dynamic classes
+        masked out before reconstruction). Each mask is `<image_filename>.png`, same
+        pixel dimensions as the image, 0 = ignore pixel for feature extraction,
+        255 = use it. See `src/frame_processing/masking.py` for how these are built
+        from segmentation output.
+        """
         work_dir = Path(work_dir)
         work_dir.mkdir(parents=True, exist_ok=True)
         db_path = work_dir / "database.db"
@@ -150,14 +212,17 @@ class ColmapBackend:
 
         gpu_flag = "1" if self.use_gpu else "0"
 
-        _run([
+        feature_extractor_cmd = [
             self.colmap_bin, "feature_extractor",
             "--database_path", str(db_path),
             "--image_path", str(image_dir),
             "--ImageReader.camera_model", "SIMPLE_RADIAL",
             "--ImageReader.single_camera", "1",
             "--SiftExtraction.use_gpu", gpu_flag,
-        ])
+        ]
+        if mask_dir is not None:
+            feature_extractor_cmd += ["--ImageReader.mask_path", str(mask_dir)]
+        _run(feature_extractor_cmd)
 
         _run([
             self.colmap_bin, "sequential_matcher",
@@ -227,7 +292,9 @@ class ColmapBackend:
         ])
         return mesh_ply
 
-    def estimate_geometry(self, frame_paths: list[str], work_dir: str | Path) -> GeometryEstimate:
+    def estimate_geometry(
+        self, frame_paths: list[str], work_dir: str | Path, mask_dir: str | Path | None = None
+    ) -> GeometryEstimate:
         """Satisfies the GeometryBackend protocol: sparse reconstruction only (fast
         path). Dense MVS/meshing is a separate call (`run_dense_reconstruction`) since
         it's much more expensive and not every caller needs it."""
@@ -240,11 +307,13 @@ class ColmapBackend:
             )
         image_dir = image_dirs.pop()
 
-        sparse_txt_dir = self.run_sparse_reconstruction(image_dir, work_dir)
+        sparse_txt_dir = self.run_sparse_reconstruction(image_dir, work_dir, mask_dir=mask_dir)
 
         images = _read_images_txt(sparse_txt_dir / "images.txt")
         cameras = _read_cameras_txt(sparse_txt_dir / "cameras.txt")
-        points_xyz, points_rgb, track_len = _read_points3d_txt(sparse_txt_dir / "points3D.txt")
+        points_xyz, points_rgb, track_len, _reproj_error, _, _point_ids = _read_points3d_txt(
+            sparse_txt_dir / "points3D.txt"
+        )
 
         poses = []
         for image_id, img in images.items():
