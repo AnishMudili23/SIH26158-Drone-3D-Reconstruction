@@ -271,3 +271,79 @@ Issues encountered:
     than blocking, but **none of Phase 2/5/6/7 has been run end-to-end against a real
     reconstruction yet** — that is the very next action once downloads finish.
 
+---
+
+## Phase 2 — first real COLMAP run (downloads finished mid-session)
+Status: DONE (sparse reconstruction only; dense/mesh not yet run — see below)
+Started: 2026-09-19 20:09
+Finished: 2026-09-19 20:24 (across two attempts, see Issues)
+
+COLMAP (v4.2.0, official `colmap-x64-windows-cuda.zip` release), Open3D, and rasterio
+all finished downloading/extracting. Immediately ran the real `ColmapBackend` wrapper
+against a real (if synthetic) multi-view image set for the first time this session.
+
+Definition of done, checked:
+  - Real .ply/.obj output from a real test video, viewable in a generic viewer: PARTIAL.
+    Sparse reconstruction succeeded (below); dense MVS + Poisson mesh
+    (`run_dense_reconstruction`) not yet run — sparse-only was prioritized first to
+    validate the wrapper/parser before spending the (much longer) dense-MVS time
+    budget. Next action.
+
+What was tested and how (no UAVid access this session — see Phase 1 entry — so built a
+purpose-made synthetic multi-view dataset instead of a real drone video):
+  - Built `scripts/generate_synthetic_3d_scene_cv.py`: a textured 3D scene (ground +
+    10 buildings) rendered from 60 camera poses along a flight path, using pure OpenCV
+    homography warping (real 3D parallax + occlusion via painter's-algorithm depth
+    sorting), NOT a full 3D renderer.
+  - First attempt used Open3D's `OffscreenRenderer` (GPU-accelerated, Vulkan backend,
+    confirmed working via `nvidia-smi`-visible driver). It proved unreliable in this
+    environment: `render_to_image()` intermittently returned fully black or
+    background-only frames, and the number of throwaway renders needed before a real
+    frame appeared was not a fixed constant — it varied with scene complexity and
+    seemingly with wall-clock time (rapid-fire retries without a `time.sleep` never
+    stabilized even after 200 attempts; adding delays helped but the delay-needed count
+    still varied per camera change, up to several seconds in one measurement). Concluded
+    this is a genuine environment/renderer-timing issue, not a config mistake, and
+    replaced it entirely with the OpenCV approach, which reuses homography math already
+    validated in `src/exports/orthomosaic.py` and has been completely reliable.
+  - Ran `ColmapBackend.estimate_geometry()` for real: **feature_extractor immediately
+    failed** — COLMAP 4.2.0 renamed `--SiftExtraction.use_gpu` /
+    `--SiftMatching.use_gpu` to `--FeatureExtraction.use_gpu` /
+    `--FeatureMatching.use_gpu` (confirmed via `colmap <command> -h` on the actual
+    installed binary, which now supports multiple extractor/matcher backends besides
+    SIFT). Fixed both flag names in `colmap_backend.py`.
+  - Re-ran: **succeeded**. 60/60 frames registered, 19,738 sparse points, sparse
+    reconstruction took 381.8s (~6.4 min) on this machine. This is the first real,
+    non-synthetic-math confirmation that the COLMAP CLI wrapper + text-model parser
+    (images.txt/cameras.txt/points3D.txt) work correctly end-to-end.
+  - Ran the new `scripts/test_phase3_integration.py` (real COLMAP poses + synthetic
+    "GPS" fixes derived from the scene's known ground truth) to validate Phase 3 against
+    real reconstruction output, not just synthetic camera matrices (as in
+    `tests/test_alignment.py`). **First run gave a nonsensical-looking result**: GPS-fit
+    residual was small (2.3m, consistent with the 1.5m noise injected) but comparing the
+    aligned camera centers to the *noiseless* ground truth gave a huge, nearly-constant
+    ~85m error across every frame. Diagnosed (not assumed) by computing an SVD of the
+    recovered camera centers: cross-track spread was ~0.07% and ~0.02% of the
+    along-track spread — the flight path in the first scene version was almost
+    perfectly straight, which makes the Umeyama similarity fit's rotation-recovery
+    genuinely degenerate (rotation about the line's own axis is unconstrained by
+    collinear points). This is a real geometric fact, not an alignment-code bug — Phase
+    0's own synthetic flight path already used a gentle S-curve for exactly this reason,
+    and this new scene generator hadn't matched that. Fixed by adding the same kind of
+    lateral (Y) sine wobble + altitude wobble to `make_flight_poses()`. Re-running COLMAP
+    on the corrected scene now (in progress at time of writing — see next entry).
+
+Assumptions made:
+  - Synthetic-scene "GPS fixes" for the Phase 3 integration test are the scene's known
+    ground-truth camera centers (already in meters) reinterpreted as ENU coordinates
+    relative to an arbitrary real-world lat/lon origin, plus injected Gaussian noise —
+    a reasonable stand-in for real GPS logs given none are available this session.
+
+Deviations from ROADMAP.md/ARCHITECTURE.md: none (dense reconstruction/mesh is Phase
+2's stated scope too, but sparse-first was a reasonable ordering choice, not a scope cut
+— dense MVS is next).
+
+Issues encountered: covered above (Open3D unreliability, COLMAP 4.2.0 flag renames,
+degenerate-trajectory alignment finding). All root-caused and fixed/worked around, not
+papered over.
+

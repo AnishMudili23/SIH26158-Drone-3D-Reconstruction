@@ -113,11 +113,23 @@ def make_scene_planes(rng: np.random.Generator, area_m: float, n_buildings: int)
 
 
 def make_flight_poses(n_frames: int, path_length_m: float, altitude_m: float, pitch_deg: float):
+    """A gentle S-curve + altitude wobble, not a perfectly straight line — a purely
+    collinear camera trajectory is a degenerate case for the Phase 3 Umeyama similarity
+    fit (rotation about the line's own axis is unconstrained; confirmed by direct
+    experiment: an earlier perfectly-straight version of this path gave COLMAP camera
+    centers with cross-axis spread ~0.07% of the along-track spread, and the resulting
+    GPS alignment fit the noisy correspondences fine but landed ~85m from the true
+    noiseless positions — a real degenerate-geometry effect, not an alignment-code bug;
+    Phase 0's own synthetic flight path already included this same S-curve for exactly
+    this reason). Real flights always have some lateral/altitude wobble, so this also
+    matches reality better than a perfectly straight line would."""
     poses = []
     t_arr = np.linspace(0, 1, n_frames)
     for tt in t_arr:
         cx = tt * path_length_m - path_length_m / 2
-        c = np.array([cx, 0.0, altitude_m])
+        cy = 8.0 * np.sin(2 * np.pi * tt * 2)
+        cz = altitude_m + 3.0 * np.sin(2 * np.pi * tt * 3)
+        c = np.array([cx, cy, cz])
         pitch = np.radians(pitch_deg)
         forward = np.array([0.0, np.sin(pitch), -np.cos(pitch)])  # tilt toward +Y (buildings)
         world_up = np.array([0.0, 0.0, 1.0])
