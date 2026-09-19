@@ -382,3 +382,46 @@ PyTorch also finished installing during this stretch (`torch==2.5.1+cu121`,
 segmentation/masking, and Phase 5's depth fusion, can now actually run rather than
 gracefully skipping. Re-running those for real is the next action.
 
+---
+
+## Phase 0 (re-run) + Phase 1 — completed for real with PyTorch installed
+Status: DONE
+Finished: 2026-09-19 20:50
+
+- Fixed a real (if minor) bug in `gpu_check.py` while re-running with torch actually
+  installed: the "below 6GB VRAM" threshold check was a bare `< 6144`, but real GPUs
+  always report a bit under their nominal size (this RTX 3050 reports 6143.5 MiB) — so
+  an *exact* 6GB card was being flagged as "below target". Added a tolerance (`< 5900`).
+  Confirmed fixed: `reports/phase0_report.md` now correctly reports "6144MiB VRAM
+  confirmed" instead of a false-alarm warning.
+- Re-ran `run_phase0.py` to regenerate the report with the real (not "torch not
+  installed") GPU section.
+- Semantic segmentation (`src/frame_processing/segmentation.py`) hit a real dependency
+  problem on first real run: `nvidia/segformer-b0-finetuned-cityscapes-1024-1024` only
+  ships a `pytorch_model.bin` (no safetensors variant), and transformers 5.17.0 refuses
+  to `torch.load` non-safetensors checkpoints on torch<2.6 (CVE-2025-32434 guard).
+  Considered and rejected upgrading torch to >=2.6 (another ~2.5GB download on this
+  slow connection) and a manual `state_dict`-loading bypass — the latter was actually
+  attempted and caught red-handed: transformers 5.x also renamed SegFormer's internal
+  module structure (`segformer.encoder.block.N...` -> `segformer.stages.N.blocks...`),
+  so the manual bypass loaded **zero** matching keys (100% missing + 100% unexpected) —
+  it would have silently produced a randomly-initialized, useless model had the
+  missing/unexpected key lists not been explicitly checked. Real lesson: a "successful"
+  bypass of a safety guard is not success until you've verified the actual thing you
+  bypassed the guard *for* still works. Fixed properly by pinning
+  `transformers==4.46.3` (predates both the module refactor and the CVE guard) —
+  verified via `output_loading_info=True` that the checkpoint now loads with zero
+  missing/unexpected/mismatched keys.
+- Also needed `torchvision` (matching cu121 build) — `SegformerImageProcessor` depends
+  on it; missing on the first torch install.
+- Ran `run_phase1.py` end-to-end for real (synthetic test video -> extraction -> quality
+  filter -> segmentation): **30 extracted -> 18 kept (2 blur, 10 duplicate) -> 18 real
+  per-frame UAVid class masks written**. This is Phase 1's Definition of Done, now
+  genuinely met (previously only the extraction/filter mechanics were verified; masks
+  were not yet produced).
+
+Assumptions made: none new.
+Deviations from ROADMAP.md/ARCHITECTURE.md: none.
+Issues encountered: covered above (VRAM threshold bug, transformers/torch version
+incompatibility chain) — both root-caused and fixed, not worked around superficially.
+

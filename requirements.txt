@@ -11,10 +11,21 @@ matplotlib==3.11.2
 imagehash==4.3.2
 scipy==1.17.1
 pyproj==3.7.2
-transformers==5.17.0
-huggingface_hub==1.32.0
+transformers==4.46.3
+huggingface_hub==0.36.2
 safetensors==0.8.0
+torchvision  # matches torch's cu121 build, installed via the PyTorch index above
 
-# Installing (Phase 2/5 dependencies):
-# open3d           — point cloud outlier removal, Poisson/TSDF meshing (Open3D stage)
-# rasterio         — DSM/DTM GeoTIFF export (Phase 7)
+open3d==0.20.0
+rasterio==1.4.4
+pytest==9.1.1
+
+# NOTE on transformers version pin (important, don't casually bump):
+# newer transformers (5.x) both (a) refactored SegFormer's internal module naming
+# (segformer.encoder.block.N -> segformer.stages.N.blocks), breaking direct loading of
+# older public checkpoints like nvidia/segformer-b0-finetuned-cityscapes-1024-1024 that
+# only ship a pytorch_model.bin in the old naming scheme, and (b) added a hard guard
+# (CVE-2025-32434) refusing to torch.load non-safetensors checkpoints on torch<2.6.
+# transformers==4.46.3 predates both issues and loads this checkpoint cleanly (verified:
+# zero missing/unexpected/mismatched keys). Revisit only alongside upgrading torch to
+# >=2.6 AND confirming the target checkpoint format still loads correctly.

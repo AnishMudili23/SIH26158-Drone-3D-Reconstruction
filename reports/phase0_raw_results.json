@@ -1,12 +1,12 @@
 {
   "gpu": {
-    "cuda_available": false,
-    "device_name": null,
-    "total_vram_mb": null,
+    "cuda_available": true,
+    "device_name": "NVIDIA GeForce RTX 3050 6GB Laptop GPU",
+    "total_vram_mb": 6143.5,
     "driver_version": "592.27",
-    "cuda_runtime_version": null,
-    "torch_version": null,
-    "recommendation": "PyTorch not installed \u2014 cannot confirm CUDA path. CPU-only fallback assumed until torch is available."
+    "cuda_runtime_version": "12.1",
+    "torch_version": "2.5.1+cu121",
+    "recommendation": "6144MiB VRAM confirmed (RTX 3050 class). Depth Anything V2 small/base checkpoints fit comfortably. COLMAP dense MVS (patch-match stereo) will run on GPU but should process frames in batches for large sequences to stay within budget. VGGT (Phase 9, stretch) is NOT safe to run locally at full frame counts on this VRAM budget \u2014 route heavy VGGT runs to a free-tier cloud GPU (Colab/Kaggle T4) per ARCHITECTURE.md, never as a hard local dependency."
   },
   "scale_recovery_sweep": [
     {

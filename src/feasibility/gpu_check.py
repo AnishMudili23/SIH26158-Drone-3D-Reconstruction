@@ -71,7 +71,10 @@ def run_gpu_check() -> GpuReport:
             "(COLMAP dense MVS, Depth Anything V2) must fall back to CPU-only "
             "execution, which will be significantly slower but still correct."
         )
-    elif total_vram_mb is not None and total_vram_mb < 6144:
+    elif total_vram_mb is not None and total_vram_mb < 5900:
+        # Real GPUs always report a bit under their nominal size (a few MiB reserved
+        # by the driver/OS) — a bare `< 6144` check flagged an actual 6GB card
+        # (reported 6143.5 MiB) as "below target", which is wrong. Use a tolerance.
         recommendation = (
             f"Only {total_vram_mb:.0f}MiB VRAM detected — below the 6GB target. "
             "Use the smallest available checkpoints (Depth Anything V2 'small') "
