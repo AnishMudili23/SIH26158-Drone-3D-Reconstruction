@@ -528,8 +528,19 @@ above, applied a second time (and this time going deep enough to find two real,
 previously-nonexistent pipeline gaps — outlier removal wasn't implemented at all).
 
 Assumptions made: none new beyond Phase 2/3/5's.
-Deviations from ROADMAP.md/ARCHITECTURE.md: none — outlier removal was already
-specified in ARCHITECTURE.md's pipeline diagram; it just hadn't been built yet before
-this real-data test surfaced the need concretely.
+Deviations from ROADMAP.md/ARCHITECTURE.md: outlier removal itself is not a deviation
+(already specified in ARCHITECTURE.md, just not yet built). However: **I built Phases
+5, 6, and 7 before Phase 4 (Web Viewer MVP)**, out of ROADMAP.md's stated order. This
+happened organically — Phase 4 wasn't blocking anything I needed to validate while
+waiting on slow downloads, and 5/6/7 were natural next steps once Phase 2/3 worked. Now
+that the CV pipeline is genuinely confirmed working end-to-end (satisfying CLAUDE.md
+constraint #3's precondition), going back to build Phase 4 next, before Phase 8.
 Issues encountered: all covered and fixed above.
+
+Re-verified DSM/DTM export too (only orthomosaic had been re-tested after the outlier-
+removal fix): with cleaned + properly-aligned data, DSM shape (53, 120) at 1m cells —
+sane, matching the true ~120m x 53m extent — value range -32 to -22m (relative to the
+frame-0-anchored origin), consistent with the building-height spread. DTM 92.2% unknown
+cells (only 1,096 Road-tagged points define it) — expected given the sparse cloud's
+limited ground-class coverage, not a bug.
 
