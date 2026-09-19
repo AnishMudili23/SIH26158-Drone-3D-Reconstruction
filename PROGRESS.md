@@ -425,3 +425,31 @@ Deviations from ROADMAP.md/ARCHITECTURE.md: none.
 Issues encountered: covered above (VRAM threshold bug, transformers/torch version
 incompatibility chain) — both root-caused and fixed, not worked around superficially.
 
+---
+
+## Phase 5 — Depth Anything V2 confirmed working for real
+Status: DONE (against synthetic-scene reconstruction; dense MVS mesh comparison still
+pending — see Phase 2 dense entry)
+Finished: 2026-09-19 20:58
+
+- `DepthEstimator.predict_relative_depth()` ran cleanly with the pinned transformers
+  version (no checkpoint-compatibility issues this time — depth-anything's checkpoint
+  format wasn't affected by the SegFormer-specific naming refactor). Real depth map
+  produced from a real frame, sane value range.
+- `fuse_depth_for_sequence()` ran against the real COLMAP sparse reconstruction from
+  `synthetic_3d_scene_cv`: **60/60 frames fused, 120,000 dense points** (2000/frame cap).
+  Per-frame affine scale/shift fits mostly had small residuals (~0.05), confirming the
+  fit logic (already unit-tested synthetically in `tests/test_depth_fusion.py`) also
+  works on real monocular-depth output, not just synthetic linear test data. One frame
+  (frame_0004) showed a much larger residual (4.5) — a genuine real-world finding, not
+  a bug: not every frame's monocular depth agrees equally well with COLMAP's sparse
+  points, which is exactly the kind of per-region unreliability Phase 6's confidence
+  reporting exists to surface rather than hide.
+- Noted: the fitted `scale_a` came out consistently *negative* (~-0.22 to -0.25) across
+  frames. Not a bug — Depth Anything V2's raw output isn't guaranteed to be positively
+  correlated with metric depth (could be an inverse-depth-like convention), and the
+  affine fit correctly discovers and cancels out whatever sign relationship exists.
+
+Assumptions made: none new. Deviations: none. Issues: none beyond what's already logged
+for the shared transformers/torch dependency chain above.
+
