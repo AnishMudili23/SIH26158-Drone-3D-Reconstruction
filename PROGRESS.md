@@ -780,6 +780,187 @@ stopping here.
    - Added `test_compute_volumetric_metrics` in [`tests/test_dsm_dtm.py`](file:///d:/SIH26158/tests/test_dsm_dtm.py).
    - Test suite now stands at **36 automated tests passing**.
 
+---
 
+## Strategic Reframe: Real UAV Data as Source of Truth, Synthetic as Dev Harness
 
+**Date**: 2026-09-20
+
+Reassessed scope: everything validated up to this point (Phases 0–8, Cycles 1–4) was
+proven against synthetic scenes or ETH3D's static handheld DSLR set — never a real
+single-pass drone flight with real GPS/IMU/barometer telemetry, which is the PS's
+literal input. Decision: synthetic data becomes a development/regression harness only;
+real UAV datasets become the primary validation path. ROADMAP.md and ARCHITECTURE.md
+were rewritten around a new Phase A–H structure layered on top of the existing Phase
+0–8 core build (kept intact, not replaced).
+
+Also discovered mid-session: substantial Phase A/B/D/E/F code (telemetry/FlightSession,
+EKF trajectory, AdaptiveKeyframeEngine, MultiViewDepthConsistencyFilter, `src/accuracy/`,
+UVTextureMapper) already existed from earlier work in this same run — written and
+unit-tested (55/55 passing at that point) but **uncommitted, undocumented in this file,
+and not wired into `src/pipeline.py`**. This cycle's job became: validate it against
+real data, wire it into production, and close the real gap (Phase H — every dataset
+adapter was a print-statement stub).
+
+### Actions & Findings
+
+**1. Real dataset acquisition (Phase H)**
+- Downloaded Zurich Urban MAV (`AGZ_subset.zip`, RPG/ETH Zurich, direct download, no
+  registration) — 350 real drone frames, real GPS/IMU/barometer CSV logs, real camera
+  calibration (`calibration_data.npz`), real surveyed ground-truth camera positions
+  (`GroundTruthAGL.csv`, UTM32N). First download attempt silently truncated at
+  257/279MB (background download died early); caught via `zipfile.BadZipFile`, fixed
+  by resuming with `curl -C -`.
+- Verified the data by hand before trusting it: cross-checked image EXIF GPS tags
+  against `OnboardGPS.csv` (imgid=1 matched to 1e-7 deg), confirming image
+  `NNNNN.jpg` <-> CSV `imgid` correspondence rather than assuming it.
+- Built `src/datasets/zurich_mav.py` — real parser into `telemetry.FlightSession`
+  (camera calibration, GPS/IMU/barometer synchronized via `FlightSession`'s own
+  interpolation, not reimplemented).
+- Downloaded a second real dataset, UZH-FPV (`race_3.zip` + `race_calibration.zip`,
+  RPG/UZH, direct download, no registration) — 822 real fisheye FPV-racing frames +
+  5,475 real IMU samples. Built `src/datasets/uzh_fpv.py`. This sequence has **no GPS
+  and no Leica ground truth** (that ground truth exists only for UZH-FPV's indoor
+  motion-capture sequences, not the outdoor "SplitS" races used here) — confirmed by
+  inspecting the actual extracted files rather than assuming ROADMAP's description
+  applied uniformly. Used instead to validate `FlightSession`'s `is_georeferenced`/
+  LOCAL_METRIC path against genuine hardware data with a real absent GPS sensor:
+  `validate_integrity()` correctly reported *"Provenance marked REAL but no GPS fixes
+  are present. Operating in LOCAL_METRIC mode."* — the no-fake-GPS rule working
+  against real hardware, not a synthetic stand-in.
+
+**2. First real single-pass drone video reconstruction (Zurich MAV)**
+- Built `scripts/run_zurich_mav_benchmark.py`: undistorts real frames using the
+  dataset's real lens calibration (`cv2.undistort`, not assumed-undistorted like the
+  ETH3D cycle), runs `ColmapBackend` with the true PINHOLE intrinsics, aligns to real
+  GPS via the same `align_geometry_to_gps` used everywhere else in this codebase.
+- Ran end-to-end against all 350 real frames: **350/350 registered (100%)**, 33,022
+  sparse points (32,289 after outlier removal), 51.2 minutes wall-clock on this RTX
+  3050 laptop. This is the first time in the project's history real drone video (not
+  a synthetic scene, not ETH3D's static DSLR set) has been pushed through the full
+  COLMAP path.
+- GPS alignment: scale factor 0.1409, mean residual against the (noisy) GPS fixes
+  themselves 0.613m — looked healthy in isolation.
+- **Caught a real bug in my own scoring script before trusting its output**: the
+  ground-truth comparison loaded the dataset's real surveyed UTM checkpoints
+  (`GroundTruthCheckpoint.utm_x/y/z`) but then never actually used them — it compared
+  reconstructed positions against each frame's own onboard GPS reading instead (close
+  to circular, since alignment was already fit to that same GPS). Root-caused by
+  writing a standalone rescoring script (`scripts/rescore_zurich_mav_benchmark.py`)
+  reusing the cached COLMAP output (no need to redo the 51-minute reconstruction) that
+  correctly reprojects UTM32N -> WGS84 -> the same ENU frame via `pyproj` before
+  comparing.
+- After the fix, error was still large — horizontal RMSE 65.1m, vertical RMSE 91.6m,
+  growing roughly with distance from the alignment origin across the 12 matched
+  checkpoints. Did not stop at this first plausible-looking number; checked whether
+  it was a second code bug or a real property of the data by going one level lower:
+  **compared the dataset's own onboard-GPS-derived position against its own surveyed
+  ground truth directly, with no COLMAP or alignment involved at all**
+  (`GroundTruthAGL.csv` conveniently reports both `x_gt,y_gt,z_gt` and
+  `x_gps,y_gps,z_gps` for the same frames). Result: raw GPS is only **~6-8m** off from
+  surveyed truth — normal consumer-GPS accuracy, nowhere near 65-92m. This rules out
+  "the GPS sensor itself is bad" and confirms the error is introduced by the alignment
+  step. Real explanation: this 350-frame subset's GPS horizontal *spread* is only
+  ~1.6m x 1.7m (see the caveat logged before this run even started) — smaller than the
+  ~7m raw GPS *noise* itself, so Umeyama similarity alignment has essentially no real
+  translational signal to fit against and instead fits a scale/rotation to noise. The
+  fit's low residual against the noisy GPS points (0.613m) is exactly what you'd
+  expect from overfitting a 7-DOF similarity transform to noise-dominated data — it
+  looks good against the same noisy points it was fit to, and diverges sharply from
+  independent surveyed truth.
+- **This is a genuine, reportable finding, not a defect to hide**: single-pass GPS
+  alignment is unreliable when the real flight segment lacks sufficient translational
+  baseline relative to GPS noise — exactly the class of problem Phase A's EKF fusion
+  and Phase C's geo-constrained refinement (see below) exist to mitigate, and a
+  concrete, real-data confirmation of Phase 0's original feasibility caveats. It also
+  means this specific 350-frame clip (apparently a hover/ascent segment on this
+  tethered Fotokite platform) is not a fair test of the pipeline's metric accuracy on
+  genuine translational flight — that requires either a different segment of the full
+  81,169-image Zurich flight (not included in the downloadable subset) or a different
+  dataset with a real flight corridor.
+
+**3. Wired Phases A, B, C, F into `src/pipeline.py` (previously isolated, untested-in-production modules)**
+- **Phase A**: `pipeline.py` now accepts `--telemetry <FlightSession JSON>`. Removed
+  the old default behavior of silently fabricating GPS fixes from a hardcoded
+  `default_origin` — that path now requires an explicit `--allow-simulated-gps` flag.
+  With no real GPS and no explicit opt-in, the pipeline runs in **LOCAL_METRIC mode**:
+  DSM/DTM, orthomosaic, and the CesiumJS viewer bundle (all meaningless without real
+  georeferencing) are skipped rather than faking coordinates; LAS export and the mesh
+  still produce output, clearly in arbitrary/ungeoreferenced units.
+- **Phase B**: `--adaptive-keyframes` runs `AdaptiveKeyframeEngine` (sharpness/
+  exposure/parallax-based selection) instead of fixed-interval extraction, for video
+  input.
+- **Phase C**: built `src/reconstruction/geo_constrained_ba.py` — pose-only geo-
+  constrained refinement (reprojection consistency + GPS-prior joint least-squares).
+  Explicitly scoped down from a full bundle adjustment (rotations and the point cloud
+  stay fixed) to avoid re-deriving COLMAP's BA machinery or taking on a pycolmap
+  dependency; documented as such in the module's own docstring. New tests
+  (`tests/test_geo_constrained_ba.py`) validate it against synthetic ground truth —
+  caught a real test-authoring bug during writing (camera looking away from its own
+  points, giving a silently-empty observation set and a falsely-passing test) before
+  it could hide a real failure the way a similar Phase 3 test bug once did. Wired into
+  `pipeline.py` as an opt-in (`--geo-constrained-ba`) diagnostic stage, written to a
+  separate `refined_trajectory.json` rather than silently overwriting the primary
+  georeferenced outputs, since it's a partial (translation-only) refinement.
+- **Phase F**: wired `UVTextureMapper` into the mesh export stage as an opt-in
+  (`--uv-texture-mapping`) additive export (`mesh_uv_textured.glb`), alongside the
+  existing (default, still-tested) vertex-colored mesh export rather than replacing it.
+- Considered wiring Phase E's `CoverageEngine` into the live confidence report too,
+  and stopped: it needs a known reference surface to compute "% observed" against;
+  without one, a live run's "total points" always equals its own "observed points",
+  so it would silently report 100% coverage regardless of actual completeness — a
+  hollow number that violates CLAUDE.md's own honesty rule. Not wired in.
+- All 57 tests pass after these changes (55 pre-existing + 2 new).
+
+**4. Found and fixed real bugs in the CesiumJS viewer (not just extended it)**
+- `points.json`'s actual schema (`origin`, no `classes` key) didn't match what
+  `cesium_viewer.html`'s JS expected (`data.origin_lla`, `data.classes`) — the viewer
+  would have thrown on any dataset using the real export path. Fixed both sides to
+  agree.
+- The "METRIC ACCURACY" badge (`val-scale`, `val-gps`, `val-reproj`) was hardcoded
+  placeholder text in the HTML that no JS ever touched — every dataset displayed the
+  same fake "99.9% / 0.000m / 0.165px" regardless of what was actually loaded. Now
+  fetches the real `confidence_report.json` and falls back to explicit "N/A" text
+  (not a fake number) when a report isn't available.
+- The "Mission Replay" flight path was **entirely fabricated** — a hardcoded synthetic
+  straight-line path (`dLat = (frac-0.5)*0.0002`), not derived from real reconstructed
+  camera positions at all. Added a real `trajectory.json` export in `pipeline.py`
+  (real aligned camera centers -> lat/lon/alt per registered frame) and made the
+  viewer load it; when unavailable (older dataset, or LOCAL_METRIC mode), the replay
+  timeline is now hidden rather than showing an invented flight path.
+- The "Structure Inspector" click handler displayed the **exact same hardcoded
+  numbers** ("3.73 m", "0.75 m2", "2.80 m3", "95.7%") no matter what was clicked or
+  which dataset was loaded. Replaced with a real nearest-point lookup (actual class,
+  confidence tier, altitude, distance to click) plus the real reconstruction-wide
+  volumetric aggregate from the confidence report, explicitly labeled
+  "RECONSTRUCTION-WIDE (not per-structure)" since there is no per-building instance
+  segmentation in this pipeline yet — an honest capability boundary, not a silent gap.
+- Verified the inline JS is syntactically valid via `node --check` (full interactive
+  browser/CDP re-verification, as was done for Phases 4 and 8, was not repeated this
+  cycle — flagged here rather than implied).
+
+### Deviations from ROADMAP.md/ARCHITECTURE.md
+None in intent — Phases A/B/C/F wired matches the rewritten roadmap. Phase E
+(coverage/uncertainty) and Phase G's remaining items (per-building instance
+inspection) are intentionally not wired in yet, for the reasons stated above, rather
+than attempted and left half-working.
+
+### What's still open after this cycle
+- Phase C/F were validated with synthetic tests and import-checked against
+  `pipeline.py`, but **not yet run end-to-end against real data** (the Zurich run
+  above used the un-refined path) — next real-data run should pass
+  `--geo-constrained-ba` and `--uv-texture-mapping` to exercise them for real.
+- UZH-FPV adapter is validated for parsing/telemetry-sync mechanics only; no
+  COLMAP reconstruction was attempted on it (fisheye equidistant undistortion isn't
+  wired into `pipeline.py`'s undistortion path yet, and there's no ground truth in
+  this sequence to score against anyway).
+- 3DAeroRelief and AirSim/synthetic-ablation (ROADMAP Phase H's other two datasets)
+  remain unimplemented stubs in `scripts/benchmark_datasets.py`.
+- Phase G's Cesium upgrade is now honest rather than fabricated, but still lacks the
+  4-tier *raster* uncertainty overlay (the existing overlay is per-point, not a grid
+  that can show genuinely unobserved cells as gray) and true per-building instance
+  inspection.
+- All of Phases A/B/C/D/E/F's code, the ARCHITECTURE.md/ROADMAP.md rewrites, the new
+  `src/datasets/` adapters, and this cycle's `pipeline.py`/viewer fixes were
+  uncommitted at the time of this entry.
 
