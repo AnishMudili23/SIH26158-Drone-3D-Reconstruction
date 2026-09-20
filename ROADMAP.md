@@ -1,107 +1,73 @@
-# ROADMAP — SIH26158 Drone 3D Reconstruction
+# ROADMAP — SIH26158 Sensor-Fused 4D Drone Reconstruction
 
-**No fixed deadline. Phase-gated, not date-gated.** Each phase must produce something
-demoable before starting the next — never run more than one phase "in progress" at once.
-
----
-
-### Phase 0 — Feasibility Harness
-**Goal:** know your system's real limits before investing in the full build.
-- GPU capability check (VRAM, CUDA availability, what model sizes are realistic)
-- Synthetic GPS-noise scale-recovery test — quantify expected metric-scale error
-- Single-pass coverage estimate — quantify % of a scene realistically unobserved from
-  one flight path geometry
-- **Definition of done:** a short report (numbers + one plot) you can quote in a pitch,
-  e.g. "expected scale error ~X%, ~Y% of scene surface unobserved in single pass."
-
-### Phase 1 — Frame Extraction, Quality Filtering & Semantic Segmentation
-**Goal:** turn a raw video into a clean, minimal, class-labeled frame set.
-- Extract frames at a controlled interval
-- Blur detection (Laplacian variance threshold)
-- Near-duplicate detection (perceptual hash)
-- Coverage check (ensure frames span the full flight path)
-- Semantic segmentation per keyframe (UAVid's 8 classes: Building, Road, Tree, Low
-  vegetation, Moving car, Static car, Human, Background clutter)
-- Dynamic classes (Moving car, Human) masked out before reconstruction
-- **Definition of done:** feed in a UAVid clip, get out a filtered frame folder with a
-  visible before/after count (e.g. "9,000 → 420 frames") plus a per-frame segmentation
-  mask for each retained frame.
-
-### Phase 2 — COLMAP Baseline Pipeline
-**Goal:** the safety-net, fully working reconstruction path.
-- Frames → COLMAP feature detection → matching → sparse SfM → dense MVS → Poisson mesh
-- **Definition of done:** a real .ply/.obj output from a real test video, viewable in
-  any generic 3D viewer (e.g. MeshLab) as a sanity check.
-
-### Phase 3 — Scale + Geo Alignment
-**Goal:** make the model metrically meaningful and georeferenced.
-- GPS/altitude-derived scale factor
-- ENU coordinate conversion → lat/lon/altitude
-- **Definition of done:** model coordinates map to real-world GPS positions; scale
-  validated against a known object dimension or ETH3D ground truth.
-
-### Phase 4 — Web Viewer (MVP)
-**Goal:** make Phases 1–3 demoable as a complete product, not a folder of files.
-- Load .glb/.obj into a quick viewer (Three.js or Streamlit widget — speed over polish)
-- One measurement tool: click two points → distance
-- **Definition of done:** open a browser, load a model, click two points, see a distance
-  number that's roughly correct.
-
-### Phase 5 — Depth Fusion (Density Upgrade)
-**Goal:** denser, better point cloud without VGGT's VRAM cost.
-- Depth Anything V2 per keyframe → fuse with COLMAP sparse points
-- Open3D outlier removal on the fused cloud
-- **Definition of done:** visibly denser point cloud than Phase 2 alone, same or better
-  mesh quality.
-
-### Phase 6 — Confidence / Coverage Reporting
-**Goal:** be honest about what the model doesn't know — done rigorously, not as an
-afterthought.
-- Per-region observation count, reprojection error, depth consistency
-- Break down by semantic class as well as by region (e.g. "buildings: 91% confident,
-  vegetation: 62% confident")
-- Visual confidence overlay (high/medium/low) in the viewer
-- **Definition of done:** a judge can toggle a "confidence" view and see which parts of
-  the model — and which classes — are trustworthy vs. guessed/interpolated.
-
-### Phase 7 — Class Tagging + DSM/DTM + Orthomosaic Exports
-**Goal:** answer the PS's five literal output categories directly, and add the standard
-GIS deliverables several competing repos already include.
-- Carry per-frame semantic labels (Phase 1) onto point cloud/mesh regions via projection
-- Export DSM/DTM (GeoTIFF) by gridding the georeferenced point cloud
-- Export an orthomosaic (GeoTIFF) by stitching frames using camera poses from COLMAP
-- **Definition of done:** the viewer can isolate/toggle "buildings only," "roads only,"
-  "vegetation only"; DSM/DTM and orthomosaic files open correctly in QGIS or similar.
-
-### Phase 8 — CesiumJS Viewer Upgrade
-**Goal:** replace the MVP viewer with a georeferenced, GIS-grade one.
-- Migrate model + class layers + confidence overlay + measurement tool into CesiumJS
-- Load DSM/DTM and orthomosaic as additional map layers
-- **Definition of done:** a single CesiumJS page showing the georeferenced model, with
-  working layer toggles, confidence overlay, and measurement tool — this becomes the
-  actual demo interface.
-
-### Phase 9 — [Stretch] VGGT Integration
-**Goal:** faster geometry estimation, if hardware/compute allows.
-- Implement VGGT behind the same `estimate_geometry()` interface as COLMAP
-- Test locally first; fall back to Colab/Kaggle T4 if 6GB VRAM is insufficient for
-  realistic frame counts
-- Explicitly address the military-use license restriction in any pitch material
-- **Definition of done:** VGGT path produces comparable output to COLMAP path on a test
-  clip, with COLMAP still fully functional as fallback.
-
-### Phase 10 — [Stretch] 3D Gaussian Splatting Visualization
-**Goal:** the "wow factor" visualization layer, on top of an already-complete system.
-- Train a Gaussian Splat from the same frame set (gsplat / Nerfstudio Splatfacto)
-- Add as an alternate view mode in CesiumJS or a companion viewer (not a replacement for
-  the measurable mesh)
-- **Definition of done:** toggle between "measurable mesh" and "photorealistic splat"
-  views in the same demo flow.
+**Continuous Improvement & Sensor-Fused Engineering Roadmap.**  
+Phases 0–8 established the baseline end-to-end photogrammetric and GIS pipeline. The current evolution pivots from a basic "Video to 3D" prototype to an **offline-capable, sensor-fused, uncertainty-aware 4D reconstruction engine**.
 
 ---
 
-## Pitch/Demo Narrative — Deferred
+## Baseline Foundation (Completed & Verified)
 
-Per current scope decision, the pitch narrative (problem → innovation → architecture →
-feasibility → impact slide structure) is being planned separately from the technical
-build and picked up later. Don't let it block Phase 0–8 progress.
+- [x] **Phase 0 — Feasibility Harness:** Scale-recovery sensitivity analysis, synthetic GPS-noise bounds, and single-pass geometric coverage constraints.
+- [x] **Phase 1 — Keyframe Extraction & Semantic Masking:** Laplacian blur filter, perceptual-hash duplicate filter, SegFormer UAVid-mapped semantic masks, and dynamic-object masking (moving cars/humans).
+- [x] **Phase 2 — COLMAP Incremental SfM Core:** Feature detection, sequential matching, camera calibration parsing, and sparse point cloud triangulation.
+- [x] **Phase 3 — Scale & Georeference Similarity Alignment:** Umeyama SVD similarity alignment, ENU cartesian conversion, and camera pose rederivation.
+- [x] **Phase 4 — ASPRS 1.4 Point Cloud Export:** Point Format 7 (`.las` / `.laz`) with 8-bit classification codes, 16-bit RGB, intensity, and WGS84/UTM GeoKey VLRs.
+- [x] **Phase 5 — Dense Depth Fusion:** Depth Anything V2 monocular depth estimation, affine scale/shift alignment, and statistical/radius outlier filtering.
+- [x] **Phase 6 — Confidence Tiers & Volumetric Metrics:** Track-length and reprojection confidence grading, DSM/DTM height differential, above-ground structure volume ($m^3$), and footprint area ($m^2$).
+- [x] **Phase 7 — GIS Deliverables:** Digital Surface Model (DSM), Digital Terrain Model (DTM), and 2D Orthomosaic GeoTIFF exports.
+- [x] **Phase 8 — CesiumJS 3D GIS Viewer:** Interactive georeferenced browser viewer with class layer toggles, confidence overlay, dataset switcher, and click-to-measure tool.
+- [x] **Regression Test Suite:** 36/36 unit tests passing across all components.
+
+---
+
+## Strategic Evolution: Sensor-Fused & Uncertainty-Aware System
+
+### Phase A — Sensor Synchronization & Telemetry Data Model
+**Goal:** Ingest multi-sensor drone telemetry with explicit provenance and temporal synchronization.
+- Implement `FlightSession` schema capturing video frames, camera calibration (focal length, principal point, radial/tangential distortion, rolling shutter), GPS fixes, 6-DoF IMU (accel/gyro), and barometric altitude.
+- Sub-millisecond sensor timestamp alignment via linear/cubic spline interpolation.
+- Enforce strict telemetry provenance (`REAL`, `SIMULATED`, `ESTIMATED`). Eliminate silent artificial default coordinates; fall back to `LOCAL_METRIC` mode if GPS is absent.
+- Implement 6-DoF Extended Kalman Filter (EKF) propagating IMU dynamics with GPS/barometer corrections to output continuous flight trajectories with covariance bounds.
+
+### Phase B — Intelligent Adaptive Keyframe Engine
+**Goal:** Transition from fixed-interval frame extraction to adaptive geometric frame selection.
+- Compute multi-criteria frame quality: sharpness (modified Laplacian), exposure balance, baseline parallax from EKF trajectory, and mutual feature overlap.
+- Target optimal 60%–80% spatial overlap while minimizing computational redundancy.
+- Dynamically scale frame density during aggressive maneuvers vs straight cruise.
+
+### Phase C — Robust Trajectory & Geo-Constrained BA
+**Goal:** Constrain visual bundle adjustment using metric telemetry priors.
+- Feed continuous EKF flight trajectory as position/orientation priors into bundle adjustment.
+- Mitigate scale drift and non-linear trajectory bend on long single-pass flight corridors.
+
+### Phase D — Multi-View Depth Consistency & AI Prior Fusion
+**Goal:** Treat AI depth strictly as an uncertainty-weighted prior verified by geometric consensus.
+- Cross-camera forward-backward depth reprojection across adjacent keyframe poses.
+- Rejection of depth predictions with $>5\%$ relative reprojection discrepancy.
+- Confidence-weighted blending of MVS dense depth and verified AI depth priors.
+
+### Phase E — Dedicated Metric Accuracy & Uncertainty Subsystem (`src/accuracy/`)
+**Goal:** Rigorous, defensible quantification of reconstruction quality.
+- Absolute Trajectory Error (ATE RMSE) and Relative Pose Error (RPE) against laser/RTK ground truth.
+- Scale error % ($|s_{est} - s_{gt}| / s_{gt}$) and horizontal/vertical geolocation RMSE.
+- Categorical surface coverage ratios: Terrain %, Roofs %, Facades %, Vegetation %, Roads %, with explicit accounting for unobserved/occluded surfaces.
+- Multi-factor point uncertainty $C \in [0, 1]$ combining ray intersection angle, reprojection error, depth consensus, and image quality.
+
+### Phase F — Class-Specific Surface Reconstruction & UV Texture Atlas
+**Goal:** Specialized geometric representation and true photo-textured mesh assets.
+- Terrain representation via DTM elevation grid; architectural structures via Poisson/alpha-shape surface mesh; vegetation via point cloud/splat representation.
+- Triangle-camera visibility raycasting, optimal view angle selection (penalizing glancing angles), and UV texture atlas packing (`mesh.glb` + texture maps).
+
+### Phase G — Operational Cesium Digital Twin & Mission Replay
+**Goal:** Turn the viewer into a mission-grade intelligence and GIS tool.
+- Mission flight replay slider: scrub flight time to inspect drone position, camera frustum, and reconstructed scene.
+- Categorical layer toggles: Buildings, Roads, Terrain, Vegetation, Vehicles.
+- 4-Tier uncertainty heatmap overlay: Green (High), Yellow (Medium), Red (Low), Gray (Unobserved).
+- Interactive structure inspection: click building to view height, footprint area, and estimated volume.
+
+### Phase H — Multi-Dataset Benchmark Harness & Controlled Ablation
+**Goal:** Validate across diverse real-world benchmarks and controlled stress conditions.
+- **Zurich Urban MAV:** Primary urban UAV reconstruction benchmark with synchronized GPS/IMU and ground truth.
+- **UZH-FPV:** High-rate IMU and Leica laser-tracker trajectory validation.
+- **3DAeroRelief:** Single-pass post-disaster structural reconstruction.
+- **AirSim / Synthetic Ablation:** Controlled degradation curves under injected GPS noise ($\pm 1\text{m}, \pm 5\text{m}$), IMU drift, blur, and altitude variations.

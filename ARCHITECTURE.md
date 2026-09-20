@@ -1,127 +1,173 @@
-# ARCHITECTURE — SIH26158 Drone 3D Reconstruction
+# ARCHITECTURE — SIH26158 Single-Pass Drone 3D Reconstruction
 
-## Design Principle
+## Core Design Principle
 
-**Each tool for what it's best at.** Don't pick one technique (pure AI, pure photogrammetry,
-pure NeRF/3DGS) — combine them, with a classical, well-understood method (COLMAP) as the
-trustworthy backbone and a swappable AI module layered on top for speed/density, never as
-a single point of failure.
+**Sensor-Fused, Uncertainty-Aware 4D Reconstruction.** Don't build a brittle `Video → AI → 3D Model` pipeline. Build:
 
-## High-Level Pipeline
+> **Video + GPS + IMU + Barometer + Camera Model → Sensor-Fused 4D Reconstruction → Metric 3D Model → Uncertainty-Aware GIS Digital Twin**
 
-```
-DRONE VIDEO (+ GPS + flight metadata)
-        │
-        ▼
-Frame Extraction (OpenCV, interval-based)
-        │
-        ▼
-Frame Quality Filter
-  - Blur detection (Laplacian variance)
-  - Near-duplicate detection (perceptual hash / SSIM)
-  - Coverage check (ensure full flight path represented)
-        │
-        ▼
-Semantic Segmentation Pass (per keyframe)
-  - Classes: Building, Road, Tree, Low vegetation, Moving car, Static car, Human, Background
-  - Dynamic classes (Moving car, Human) → masked out before reconstruction
-  - Static classes (Building, Road, Tree/vegetation) → carried forward as point/mesh tags
-        │
-        ▼
-   ┌────────────────────┐
-   │  COLMAP (baseline)  │──── feature detection → matching → SfM → sparse cloud
-   └─────────┬──────────┘
-             │
-             ▼
-   Optional: Depth Anything V2 monocular depth per keyframe
-             │
-             ▼
-   Depth + Sparse Point Fusion → Dense Point Cloud
-             │
-             ▼
-   Outlier Removal (statistical + radius filtering, Open3D)
-             │
-             ▼
-   Scale + Geo Alignment (GPS/altitude-derived scale factor, ENU coordinate conversion)
-             │
-        ┌────┴────┐
-        ▼         ▼
-   Mesh (Poisson  Confidence/Coverage Report
-   or TSDF,       (observation count, reprojection error,
-   class-tagged)   % scene unseen, per-class breakdown)
-        │
-        ▼
-   Texture Mapping (project original frames onto mesh)
-        │
-        ▼
-   ┌─────────────┬─────────────┬──────────────┐
-   ▼             ▼             ▼              ▼
- Point Cloud   Textured Mesh  DSM/DTM       Orthomosaic
- (.ply,        (.obj/.glb,    (GeoTIFF,     (GeoTIFF,
- class-tagged) class-tagged)  gridded from  stitched from
-                              point cloud)  frames+poses)
-   └─────────────┴─────────────┴──────────────┘
+Classical geometry (COLMAP, multi-view geometry, Extended Kalman Filtering) provides the defensible, metric backbone. AI models (aerial segmentation, Depth Anything V2 monocular depth) provide semantic metadata and uncertainty-weighted geometric priors. Every reconstructed deliverable carries verifiable confidence bounds.
+
+---
+
+## High-Level System Architecture
+
+```text
+                         SINGLE DRONE PASS
+                              │
+                ┌─────────────┴─────────────┐
+                │                           │
+             VIDEO                    FLIGHT TELEMETRY
+                │                           │
+                │                    ┌──────┼─────────┐
+                │                    │      │         │
+                │                   GPS    IMU     BAROMETER
+                │                    │      │         │
+                └──────────┬─────────┴──────┴─────────┘
+                           │
+                           ▼
+                 SENSOR TIME SYNCHRONIZATION
+              (sub-millisecond alignment, FlightSession)
+                           │
+                           ▼
+                 CAMERA CALIBRATION & INTRINSICS
+             (fx, fy, cx, cy, radial/tangential distortion)
+                           │
+                           ▼
+                 INTELLIGENT KEYFRAME ENGINE
+          ┌────────────────┼────────────────┐
+          │                │                │
+     Blur Score       Exposure/SSIM     Parallax / Overlap (60-80%)
+          │                │                │
+          └────────────────┼────────────────┘
+                           ▼
+                  DYNAMIC OBJECT MASKING
+              ┌────────────┴────────────┐
+              │                         │
+         Static Scene              Dynamic Objects
+              │                    (moving cars, humans)
+              ▼                         │
+      FEATURE EXTRACTION                X (masked out)
+              │
+              ▼
+       TEMPORAL MATCHING
+              │
+              ▼
+       VISUAL ODOMETRY / SfM
+              │
+              ▼
+       GPS + IMU + BARO TRAJECTORY FUSION (EKF)
+              │
+              ▼
+        GEO-CONSTRAINED BUNDLE ADJUSTMENT
+              │
+              ▼
+        METRIC CAMERA POSES & TRAJECTORY
+              │
+       ┌──────┴─────────┐
+       │                │
+       ▼                ▼
+   Sparse SfM       Dense MVS
+       │                │
+       │          + Depth Prior (Depth Anything V2)
+       │                │
+       └───────┬────────┘
+               ▼
+         MULTI-VIEW DEPTH CONSISTENCY FILTERING
+         (cross-camera reprojection consensus)
+               │
+               ▼
+        DENSE POINT CLOUD (Confidence-Weighted)
+               │
+               ▼
+       STATISTICAL & RADIUS OUTLIER REMOVAL
+               │
+               ▼
+      SEMANTIC POINT TAGGING (Aerial Taxonomy)
+               │
+               ▼
+      CLASS-SPECIFIC SURFACE RECONSTRUCTION
+       ┌───────┼────────────────────────┐
+       ▼       ▼                        ▼
+    Terrain  Buildings             Vegetation
+    (DTM)    (Surface Mesh)        (Point Cloud / Splat)
+       │       │                        │
+       └───────┼────────────────────────┘
+               ▼
+        UV TEXTURE MAPPING & ATLAS
+        (triangle visibility + optimal view selection)
+               │
+        ┌──────┼────────┬───────────┐
+        ▼      ▼        ▼           ▼
+      Mesh   Point     DSM/DTM   Orthomosaic
+      (.glb) Cloud    (GeoTIFF)   (GeoTIFF)
+             (.las/.laz)
+        │      │        │           │
+        └──────┴────────┴───────────┘
                        │
                        ▼
-   Web Viewer (CesiumJS — georeferenced 3D Tiles/terrain)
-     - Load model with class-based layer toggles
-     - Click-to-measure (distance between two points)
-     - Confidence overlay toggle
-        │
-        ▼
-   [STRETCH] VGGT swap-in behind a Geometry Module interface
-   [STRETCH] 3D Gaussian Splatting visualization layer
-   [STRETCH] Cloud GPU tiering (Colab/Kaggle T4) for VGGT-heavy runs
+            METRIC ACCURACY & UNCERTAINTY ENGINE
+        ┌──────────────┼──────────────┐
+        ▼              ▼              ▼
+    Geometry       Coverage       Semantic
+    Confidence     Confidence     Confidence
+   (Reproj, Ray)  (Categorical)  (Class Stability)
+        │              │              │
+        └──────────────┼──────────────┘
+                       ▼
+          OPERATIONAL CESIUM DIGITAL TWIN
+      - Mission Flight Replay & Frustum Tracking
+      - Categorical Layer Toggles (Buildings, Roads, Veg, Terrain)
+      - 4-Tier Uncertainty Heatmap (Green, Yellow, Red, Gray)
+      - Interactive Structure Inspector (Height, Footprint, Volume)
+      - Metric 3D Measurement & Elevation Profiles
 ```
 
-## Component Responsibilities
+---
 
-| Component | Responsibility | Library/Tool |
-|---|---|---|
-| Video Decoder | Extract frames at controlled interval | OpenCV / FFmpeg |
-| Frame Quality Filter | Blur, duplicate, coverage filtering | OpenCV (Laplacian), imagehash |
-| Semantic Segmentation | Classify buildings/roads/vegetation/terrain/dynamic objects per frame | UAVid-class segmentation model (SegFormer or similar) |
-| Object Masking | Remove dynamic objects (moving car, human) before reconstruction | Output of Semantic Segmentation, no separate model needed |
-| SfM/MVS Core | Camera poses, sparse + dense point cloud | COLMAP |
-| Depth Module | Dense monocular depth per frame | Depth Anything V2 (fits 6GB VRAM) |
-| Point Fusion | Merge COLMAP sparse + depth-derived dense points | Custom (NumPy/Open3D) |
-| Outlier Removal | Clean point cloud | Open3D |
-| Scale/Geo Alignment | GPS/altitude scale factor, ENU conversion | Custom + pyproj |
-| Class Tagging | Carry per-frame semantic labels onto point cloud/mesh regions | Custom (nearest-frame projection) |
-| Mesh Reconstruction | Point cloud → surface mesh | Open3D (Poisson / TSDF) |
-| Texture Mapping | Project frame textures onto mesh | Open3D / custom visibility calc |
-| DSM/DTM Export | Grid the point cloud into elevation rasters | GDAL / rasterio |
-| Orthomosaic Export | Stitch top-down 2D map from frames + poses | OpenCV / custom |
-| Confidence Module | Score density/reprojection error per region, incl. per-class | Custom |
-| Web Viewer | Georeferenced interactive display + measurement + layer toggles | CesiumJS |
+## Subsystem Breakdown & Component Responsibilities
 
-## The Swappable AI Geometry Module (Practicability requirement)
+| Subsystem | Component | Responsibility | Tech / Library |
+|---|---|---|---|
+| **Input & Telemetry** | `FlightSession` | Synchronizes video frames with high-rate GPS, IMU, and Barometer. Strictly enforces provenance (`REAL`, `SIMULATED`, `ESTIMATED`). | Python `dataclasses`, `scipy.interpolate` |
+| **Input & Telemetry** | `EKF Trajectory` | Continuous 6-DoF state propagation (accel, gyro) with GPS and barometric height updates. | Extended Kalman Filter, `numpy` |
+| **Frame Processing** | `AdaptiveKeyframeEngine` | Selects minimal frame subset preserving 60–80% mutual overlap, high contrast, and sharp features. | OpenCV, `numpy` |
+| **Frame Processing** | `DynamicMasking` | Identifies and tracks dynamic moving objects to exclude them from SfM bundle adjustment. | SegFormer, optical flow |
+| **Reconstruction** | `ColmapBackend` | Incremental Structure-from-Motion, camera pose estimation, and sparse triangulation. | COLMAP CLI, CUDA |
+| **Reconstruction** | `GeoConstrainedBA` | Incorporates EKF trajectory positions and camera orientation priors into geometry optimization. | Ceres / COLMAP priors |
+| **Dense Depth** | `DepthPrior` | Monocular relative depth maps for every selected keyframe. | Depth Anything V2 (Torch, FP16) |
+| **Dense Depth** | `MultiviewConsistency` | Forward-backward reprojection checks across adjacent camera views to accept/reject AI depth. | Custom multi-view reprojection |
+| **Dense Depth** | `DepthFusion` | Confidence-weighted blending of MVS depth and verified AI depth priors. | Custom, Open3D |
+| **Point Cloud** | `OutlierRemoval` | Statistical and radius-based noise filtering to remove floating artifacts. | Open3D |
+| **Classification** | `ClassTagging` | Projects multi-view aerial segmentation labels onto 3D points; computes label agreement. | Custom multi-view voting |
+| **Surface & Texture** | `SurfaceReconstruction` | Partitioned reconstruction: DTM for terrain, Poisson/Alpha shapes for buildings, point/splat for trees. | Open3D, `scipy.spatial` |
+| **Surface & Texture** | `TextureMapper` | Raycasts triangle visibility, scores camera view angles, projects UVs, and packs texture atlas. | Trimesh / Open3D, Pillow |
+| **GIS Exports** | `LasExporter` | ASPRS 1.4 Point Format 7 (`.las` / `.laz`) with 8-bit classification, RGB, intensity, and CRS GeoKeys. | `laspy[lazrs]` |
+| **GIS Exports** | `RasterExporter` | High-resolution DSM and DTM GeoTIFFs, orthomosaic raster with spatial bounds. | Rasterio, GDAL, OpenCV |
+| **Accuracy Subsystem** | `MetricAccuracy` | Computes ATE RMSE, RPE, scale error %, horizontal/vertical RMSE, and Chamfer distance. | `src/accuracy/` |
+| **Uncertainty Subsystem**| `UncertaintyEngine` | Calculates multi-factor point confidence ($C \in [0, 1]$) and categorical scene coverage ratios. | `src/accuracy/` |
+| **Digital Twin** | `CesiumDigitalTwin` | Mission flight replay, categorical layer toggles, 4-tier uncertainty overlay, building metric inspector. | CesiumJS, HTML5 / Vanilla JS |
 
-VGGT's license permits commercial use but explicitly **excludes military applications**,
-and only a separate, application-gated commercial checkpoint is licensed at all — the
-original checkpoint remains non-commercial. Since this PS explicitly lists military
-reconnaissance as an application, VGGT must never be presented as an unquestioned
-production dependency.
+---
 
-**Design contract:** any AI geometry estimator (VGGT or otherwise) sits behind a single
-interface (`estimate_geometry(frames) -> poses, depth, points`). COLMAP's SfM/MVS output
-satisfies the same interface and is the default/fallback path. Swapping models later means
-implementing the interface, not rewriting the pipeline.
+## Strict Telemetry Provenance Rules
 
-## Hardware-Driven Decisions
+1. **Explicit Provenance Modes:**
+   - `REAL`: Recorded from physical UAV hardware (e.g. DJI, PX4, ArduPilot telemetry logs).
+   - `SIMULATED`: Synthetically generated from known physics/simulation environments (e.g. AirSim, Gazebo, OpenCV).
+   - `ESTIMATED`: Derived purely from visual odometry when telemetry sensors are absent.
+2. **No Silent Hardcoded GPS:**
+   The system never falls back to an unverified default coordinate (e.g. `(12.9716, 77.5946, 900.0)`). When GPS is missing, the pipeline enters `LOCAL_METRIC` mode, reporting:
+   > *"Georeferencing unavailable — operating in Local Metric Mode."*
 
-RTX 3050 6GB is tight for VGGT (memory-heavy across many frames simultaneously) but
-comfortable for:
-- COLMAP sparse reconstruction (CPU-tolerant, GPU accelerates feature matching)
-- COLMAP dense MVS (needs CUDA — RTX 3050 qualifies, just slower on large frame counts)
-- Depth Anything V2 (lightweight, designed to run on consumer GPUs)
+---
 
-**Decision:** Depth Anything V2 is the primary AI depth-fusion path for MVP. VGGT is a
-stretch-phase addition, gated on either accepting slower/limited runs locally or using a
-free-tier cloud GPU (Colab/Kaggle T4) for those specific runs.
+## Multi-Dataset Validation Strategy
 
-## Georeferencing
-
-Convert local reconstruction coordinates → ENU (East-North-Up) frame anchored at the
-flight's GPS origin → standard lat/lon/altitude. This is the standard geodesy approach for
-this exact conversion (rather than an ad-hoc scale-and-shift).
+| Benchmark Dataset | Sensor Modalities | Target Evaluation Metric | Role in Pipeline |
+|---|---|---|---|
+| **Zurich Urban MAV** | High-res video, GPS, IMU, ground truth | Urban UAV reconstruction, geo-accuracy, building volumetrics | **Primary Urban Benchmark** |
+| **UZH-FPV** | High-rate IMU, camera, Leica laser tracker | Absolute Trajectory Error (ATE RMSE), Relative Pose Error (RPE) | **VIO / Trajectory Benchmark** |
+| **3DAeroRelief** | Low-cost UAV video, dense SfM/MVS reference | Single-pass post-disaster structural reconstruction, damage mapping | **Disaster Scene Benchmark** |
+| **AirSim / Synthetic** | Perfect ground truth mesh, depth, trajectory, IMU | Controlled ablation curves under GPS noise ($\pm 1\text{m}, \pm 5\text{m}$), IMU drift, blur | **Controlled Robustness Testing** |
+| **ETH3D (Delivery Area)**| Multi-view DSLR, laser-scanned ground truth | Generic multi-view geometry sanity check (25.7 MP) | **Baseline Geometry Verification** |
