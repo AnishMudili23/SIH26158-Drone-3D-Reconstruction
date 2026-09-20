@@ -56,46 +56,62 @@ def refine_poses_with_gps_priors(
     if n == 0:
         return GeoConstrainedBAResult({}, 0.0, 0.0, 0, 0)
 
-    x0 = np.concatenate([c.astype(np.float64) for c in initial_centers])
-
-    def residuals(x: np.ndarray) -> np.ndarray:
-        centers = x.reshape(n, 3)
-        res = []
-        for i in range(n):
-            r, k, c = rotations[i], intrinsics[i], centers[i]
-            for px, py, xyz in observations[i]:
-                x_cam = r @ (xyz - c)
-                if x_cam[2] <= 1e-6:
-                    continue
-                proj = k @ x_cam
-                u, v = proj[0] / proj[2], proj[1] / proj[2]
-                res.append(u - px)
-                res.append(v - py)
-            name = camera_names[i]
-            if name in gps_priors_enu:
-                res.extend((gps_weight * (centers[i] - gps_priors_enu[name])).tolist())
-        return np.array(res) if res else np.zeros(1)
-
-    result = least_squares(residuals, x0, method="trf", max_nfev=2000)
-    refined = result.x.reshape(n, 3)
-
+    refined_centers = {}
     reproj_errors, gps_errors = [], []
+
     for i in range(n):
-        r, k, c = rotations[i], intrinsics[i], refined[i]
-        for px, py, xyz in observations[i]:
-            x_cam = r @ (xyz - c)
-            if x_cam[2] <= 1e-6:
-                continue
-            proj = k @ x_cam
-            u, v = proj[0] / proj[2], proj[1] / proj[2]
-            reproj_errors.append(np.hypot(u - px, v - py))
         name = camera_names[i]
-        if name in gps_priors_enu:
-            gps_errors.append(np.linalg.norm(refined[i] - gps_priors_enu[name]))
+        r = rotations[i]
+        k = intrinsics[i]
+        c0 = initial_centers[i]
+        cam_obs = observations[i]
+        gps_prior = gps_priors_enu.get(name)
+
+        if len(cam_obs) == 0:
+            refined_centers[name] = c0
+            if gps_prior is not None:
+                gps_errors.append(np.linalg.norm(c0 - gps_prior))
+            continue
+
+        # Pre-filter observations that are in front of the camera at initial pose
+        valid_obs = [o for o in cam_obs if (r @ (o[2] - c0))[2] > 0.01]
+        if not valid_obs:
+            refined_centers[name] = c0
+            continue
+
+        xyz_arr = np.array([o[2] for o in valid_obs], dtype=np.float64)
+        px_py = np.array([[o[0], o[1]] for o in valid_obs], dtype=np.float64)
+
+        def cam_residuals(c: np.ndarray) -> np.ndarray:
+            xc = (xyz_arr - c) @ r.T
+            z = np.maximum(xc[:, 2:3], 1e-3)
+            u = k[0, 0] * xc[:, 0:1] / z + k[0, 2]
+            v = k[1, 1] * xc[:, 1:2] / z + k[1, 2]
+            diff = (np.hstack([u, v]) - px_py).ravel()
+            if gps_prior is not None:
+                gps_diff = gps_weight * (c - gps_prior)
+                return np.concatenate([diff, gps_diff])
+            return diff
+
+        result = least_squares(cam_residuals, c0.astype(np.float64), method="trf", max_nfev=150)
+        c_opt = result.x
+        refined_centers[name] = c_opt
+
+        # Compute metrics
+        xc_opt = (xyz_arr - c_opt) @ r.T
+        z_opt = np.maximum(xc_opt[:, 2:3], 1e-3)
+        u_opt = k[0, 0] * xc_opt[:, 0:1] / z_opt + k[0, 2]
+        v_opt = k[1, 1] * xc_opt[:, 1:2] / z_opt + k[1, 2]
+        res_2d = np.hstack([u_opt, v_opt]) - px_py
+        errors = np.hypot(res_2d[:, 0], res_2d[:, 1])
+        reproj_errors.extend(errors.tolist())
+
+        if gps_prior is not None:
+            gps_errors.append(np.linalg.norm(c_opt - gps_prior))
 
     n_obs = sum(len(o) for o in observations)
     return GeoConstrainedBAResult(
-        refined_centers={camera_names[i]: refined[i] for i in range(n)},
+        refined_centers=refined_centers,
         mean_reprojection_error_px=float(np.mean(reproj_errors)) if reproj_errors else 0.0,
         mean_gps_residual_m=float(np.mean(gps_errors)) if gps_errors else 0.0,
         n_cameras_refined=n,

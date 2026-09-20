@@ -73,10 +73,10 @@ class UVTextureMapper:
             cam_center_w = -cam.rotation.T @ cam.translation
 
             # Vectors from triangle centroids to camera
-            v_cam = cam_center_w - centroids
-            dists = np.linalg.norm(v_cam, axis=1, keepdims=True)
+            v_cam_center = cam_center_w - centroids
+            dists = np.linalg.norm(v_cam_center, axis=1, keepdims=True)
             dists[dists == 0] = 1e-6
-            v_cam_unit = v_cam / dists
+            v_cam_unit = v_cam_center / dists
 
             # Cosine of angle between face normal and camera vector
             cos_angle = np.sum(normals * v_cam_unit, axis=1)
@@ -84,28 +84,37 @@ class UVTextureMapper:
             # Faces facing away or beyond max glancing angle get score <= 0
             cos_min = np.cos(self.max_glancing_angle)
             valid_angle = cos_angle > cos_min
+            if not np.any(valid_angle):
+                continue
 
-            # Project all 3 triangle vertices into camera
-            for face_sub_idx in np.where(valid_angle)[0]:
-                tri_verts = vertices[faces[face_sub_idx]]  # (3, 3)
-                tri_cam = (cam.rotation @ tri_verts.T + cam.translation[:, np.newaxis]).T
-                if np.any(tri_cam[:, 2] <= 1e-3):
-                    continue
+            # 1. Project all unique vertices into this camera
+            v_cam = vertices @ cam.rotation.T + cam.translation
+            z = v_cam[:, 2]
+            valid_z = z > 1e-3
 
-                # Pinhole projection
-                u = (cam.intrinsics[0, 0] * tri_cam[:, 0] / tri_cam[:, 2]) + cam.intrinsics[0, 2]
-                v = (cam.intrinsics[1, 1] * tri_cam[:, 1] / tri_cam[:, 2]) + cam.intrinsics[1, 2]
+            u = np.where(valid_z, (cam.intrinsics[0, 0] * v_cam[:, 0] / np.maximum(z, 1e-3)) + cam.intrinsics[0, 2], -1.0)
+            v = np.where(valid_z, (cam.intrinsics[1, 1] * v_cam[:, 1] / np.maximum(z, 1e-3)) + cam.intrinsics[1, 2], -1.0)
+            in_bounds = valid_z & (u >= 0.0) & (u < cam.width) & (v >= 0.0) & (v < cam.height)
 
-                # Check if all 3 vertices are strictly within sensor image bounds
-                if np.all((u >= 0) & (u < cam.width) & (v >= 0) & (v < cam.height)):
-                    # Score = cos_angle / distance
-                    score = float(cos_angle[face_sub_idx] / (1.0 + 0.05 * dists[face_sub_idx, 0]))
-                    if score > best_scores[face_sub_idx]:
-                        best_scores[face_sub_idx] = score
-                        face_camera_idx[face_sub_idx] = cam_idx
-                        # UV coordinates in [0, 1]
-                        face_uvs[face_sub_idx, :, 0] = u / cam.width
-                        face_uvs[face_sub_idx, :, 1] = 1.0 - (v / cam.height)  # OpenGL/glTF UV origin at bottom-left
+            # 2. Vectorized check: all 3 vertices of triangle must be within image bounds
+            face_valid = valid_angle & np.all(in_bounds[faces], axis=1)
+            if not np.any(face_valid):
+                continue
+
+            # Compute score for all candidate faces
+            cand_scores = (cos_angle[face_valid] / (1.0 + 0.05 * dists[face_valid, 0])).astype(np.float32)
+            cand_face_indices = np.where(face_valid)[0]
+
+            better_mask = cand_scores > best_scores[cand_face_indices]
+            better_face_idx = cand_face_indices[better_mask]
+
+            if len(better_face_idx) > 0:
+                best_scores[better_face_idx] = cand_scores[better_mask]
+                face_camera_idx[better_face_idx] = cam_idx
+                # Vectorized UV assignment
+                face_v_indices = faces[better_face_idx]  # (K, 3)
+                face_uvs[better_face_idx, :, 0] = u[face_v_indices] / cam.width
+                face_uvs[better_face_idx, :, 1] = 1.0 - (v[face_v_indices] / cam.height)
 
         return face_camera_idx, face_uvs
 
@@ -153,6 +162,10 @@ class UVTextureMapper:
         # Compute vertex normals for lighting
         mesh.compute_vertex_normals()
 
-        # Write mesh out to GLB/PLY
+        # Write mesh out to GLB and companion OBJ + texture
         o3d.io.write_triangle_mesh(str(output_glb_path), mesh)
+        obj_path = output_glb_path.with_suffix(".obj")
+        o3d.io.write_triangle_mesh(str(obj_path), mesh, write_triangle_uvs=True)
+        tex_path = output_glb_path.parent / f"{output_glb_path.stem}_texture.png"
+        img.save(str(tex_path))
         return output_glb_path

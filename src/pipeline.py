@@ -522,7 +522,7 @@ def run_pipeline(
             "origin": origin_dict,
             "origin_lla": origin_dict,
             "n_points": len(viewer_points),
-            "classes": sorted(set(class_names.tolist())),
+            "classes": sorted(set(class_names)),
             "points": viewer_points,
         }))
         print(f"  [Viewer] Prepared CesiumJS point bundle: {viewer_dir / 'points.json'}")
@@ -549,55 +549,62 @@ def run_pipeline(
     # 6. Scaled 3D Mesh Export (scale factor applied only when georeferenced; otherwise
     # the mesh stays in COLMAP's own arbitrary units, clearly not real-world meters)
     mesh_scale = float(align_result.scale_factor) if has_geo else 1.0
-    mesh_candidates = [
-        reconstruction_dir / "dense" / "meshed-poisson.ply",
-        Path("outputs/phase2_colmap_test/dense/meshed-poisson.ply"),
-    ]
-    for mc in mesh_candidates:
-        if mc.exists():
-            try:
-                import open3d as o3d
-                mesh = o3d.io.read_triangle_mesh(str(mc))
-                if len(mesh.vertices) > 0:
-                    verts = np.asarray(mesh.vertices) * mesh_scale
-                    mesh.vertices = o3d.utility.Vector3dVector(verts)
-                    mesh.compute_vertex_normals()
-                    glb_out = viewer_dir / "mesh_scaled.glb"
-                    o3d.io.write_triangle_mesh(str(glb_out), mesh)
-                    shutil.copy(str(glb_out), deliverables_dir / "mesh_textured.glb")
-                    shutil.copy(str(mc), deliverables_dir / "mesh_textured.ply")
-                    print(f"  [Deliverable] Scaled 3D Mesh: {deliverables_dir / 'mesh_textured.glb'}")
+    dense_mesh_path = reconstruction_dir / "dense" / "meshed-poisson.ply"
+    mesh = None
+    try:
+        import open3d as o3d
+        if dense_mesh_path.exists():
+            mesh = o3d.io.read_triangle_mesh(str(dense_mesh_path))
+        elif len(clean_points) >= 10:
+            pcd = o3d.geometry.PointCloud()
+            pcd.points = o3d.utility.Vector3dVector(clean_points)
+            if len(clean_rgb) == len(clean_points):
+                pcd.colors = o3d.utility.Vector3dVector(clean_rgb.astype(np.float64) / 255.0)
+            pcd.estimate_normals()
+            mesh, _ = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pcd, depth=8)
 
-                    # 6b. [optional] Phase F: real multi-view UV texture bake, as a
-                    # separate file — the vertex-colored export above is already the
-                    # tested default; this is an additive, opt-in upgrade.
-                    if run_uv_texture_mapping:
-                        try:
-                            faces = np.asarray(mesh.triangles, dtype=np.int32)
-                            sample_img = cv2.imread(str(next(image_folder.glob("*"))))
-                            img_h, img_w = sample_img.shape[:2]
-                            cam_views = []
-                            for i, pose in enumerate(poses):
-                                img_path = image_folder / Path(pose.frame_path).name
-                                if not img_path.exists():
-                                    continue
-                                cam_views.append(CameraView(
-                                    camera_idx=i,
-                                    image_path=img_path,
-                                    rotation=pose.rotation,
-                                    translation=pose.translation * mesh_scale,
-                                    intrinsics=pose.intrinsics,
-                                    width=img_w,
-                                    height=img_h,
-                                ))
-                            uv_glb_out = deliverables_dir / "mesh_uv_textured.glb"
-                            UVTextureMapper.bake_and_export_glb(verts, faces, cam_views, uv_glb_out)
-                            print(f"  [Deliverable] UV-textured 3D Mesh: {uv_glb_out}")
-                        except Exception as e:
-                            print(f"  [Notice] UV texture mapping skipped ({e})")
-                    break
-            except Exception as e:
-                print(f"  [Notice] Mesh conversion skipped ({e})")
+        if mesh is not None and len(mesh.vertices) > 0:
+            verts = np.asarray(mesh.vertices) * mesh_scale
+            mesh.vertices = o3d.utility.Vector3dVector(verts)
+            mesh.compute_vertex_normals()
+            glb_out = viewer_dir / "mesh_scaled.glb"
+            o3d.io.write_triangle_mesh(str(glb_out), mesh)
+            shutil.copy(str(glb_out), deliverables_dir / "mesh_textured.glb")
+            ply_out = deliverables_dir / "mesh_textured.ply"
+            o3d.io.write_triangle_mesh(str(ply_out), mesh)
+            print(f"  [Deliverable] Scaled 3D Mesh: {deliverables_dir / 'mesh_textured.glb'}")
+
+            # 6b. [optional] Phase F: real multi-view UV texture bake, as a
+            # separate file — the vertex-colored export above is already the
+            # tested default; this is an additive, opt-in upgrade.
+            if run_uv_texture_mapping:
+                try:
+                    faces = np.asarray(mesh.triangles, dtype=np.int32)
+                    img_candidates = [p for p in image_folder.iterdir() if p.suffix.lower() in (".jpg", ".jpeg", ".png")]
+                    if img_candidates:
+                        sample_img = cv2.imread(str(img_candidates[0]))
+                        img_h, img_w = sample_img.shape[:2]
+                        cam_views = []
+                        for i, pose in enumerate(poses):
+                            img_path = image_folder / Path(pose.frame_path).name
+                            if not img_path.exists():
+                                continue
+                            cam_views.append(CameraView(
+                                camera_idx=i,
+                                image_path=img_path,
+                                rotation=pose.rotation,
+                                translation=pose.translation * mesh_scale,
+                                intrinsics=pose.intrinsics,
+                                width=img_w,
+                                height=img_h,
+                            ))
+                        uv_glb_out = deliverables_dir / "mesh_uv_textured.glb"
+                        UVTextureMapper.bake_and_export_glb(verts, faces, cam_views, uv_glb_out)
+                        print(f"  [Deliverable] UV-textured 3D Mesh: {uv_glb_out}")
+                except Exception as e:
+                    print(f"  [Notice] UV texture mapping skipped ({e})")
+    except Exception as e:
+        print(f"  [Notice] Mesh conversion skipped ({e})")
 
     print("\n========================================================")
     print("  Pipeline Completed Successfully!")
