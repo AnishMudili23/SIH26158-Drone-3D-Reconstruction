@@ -58,9 +58,26 @@ def _run(cmd: list[str], cwd: str | None = None) -> None:
 
 
 def _read_images_txt(path: Path) -> dict[int, dict]:
-    """Parses COLMAP's images.txt (text model export format)."""
+    """Parses COLMAP's images.txt (text model export format).
+
+    Only comment lines are dropped, never blank ones: each image is exactly a
+    (pose line, POINTS2D line) pair, and the POINTS2D line can be legitimately empty
+    (e.g. a ground-truth/calibration-only export with no matched features at all —
+    confirmed to actually occur in ETH3D's dslr_calibration_undistorted/images.txt).
+    Filtering blank lines globally would desynchronize the strict i/i+1 pairing below
+    the moment any POINTS2D line is empty, silently corrupting every pose read after
+    the first empty one.
+    """
     images = {}
-    lines = [l.strip() for l in path.read_text().splitlines() if l.strip() and not l.startswith("#")]
+    lines = [l.rstrip("\n") for l in path.read_text().splitlines() if not l.startswith("#")]
+    # A well-formed file always has an even number of lines (strict pose/POINTS2D
+    # pairs). Only trim a dangling trailing blank line if the count is odd — an empty
+    # POINTS2D line for the genuinely last image is legitimate and must NOT be
+    # stripped just because it's also the last line (caught by a test: stripping
+    # unconditionally deleted the real last image's empty points2d line, not a stray
+    # artifact).
+    while len(lines) % 2 != 0 and lines and lines[-1] == "":
+        lines.pop()
     for i in range(0, len(lines), 2):
         parts = lines[i].split()
         image_id = int(parts[0])
