@@ -50,10 +50,39 @@ def find_colmap_binary() -> str:
 
 
 def _run(cmd: list[str], cwd: str | None = None) -> None:
-    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
-    if result.returncode != 0:
+    process = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        encoding="utf-8",
+        errors="replace",
+    )
+    captured_lines = []
+    assert process.stdout is not None
+    for line in process.stdout:
+        captured_lines.append(line)
+        line_str = line.strip()
+        # Print informative progress milestones to console
+        if any(keyword in line_str for keyword in (
+            "Registering image",
+            "Bundle adjustment",
+            "Extracting features",
+            "Matching image",
+            "Retriangulating",
+            "Global bundle adjustment",
+            "Elapsed time",
+            "Points:",
+            "Images:",
+        )):
+            print(f"    [COLMAP] {line_str}", flush=True)
+
+    process.wait()
+    if process.returncode != 0:
         raise RuntimeError(
-            f"Command failed ({' '.join(cmd)}):\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            f"Command failed ({' '.join(cmd)}):\n" + "".join(captured_lines[-50:])
         )
 
 

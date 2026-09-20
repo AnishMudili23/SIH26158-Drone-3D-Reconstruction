@@ -35,7 +35,10 @@ from geo.scale_alignment import (
     align_geometry_to_gps,
     enu_to_gps,
     gps_fixes_to_enu,
+    lla_to_enu,
 )
+from reconstruction.geo_constrained_ba import refine_poses_with_gps_priors
+from exports.texture_mapper import CameraView, UVTextureMapper
 from exports.class_tagging import tag_points_by_class, tags_to_class_names
 from exports.las_export import export_point_cloud_to_las
 from exports.dsm_dtm import export_dsm_dtm, utm_epsg_for_lonlat
@@ -47,15 +50,23 @@ from confidence.confidence_report import (
     compute_confidence_tiers,
     per_class_confidence_breakdown,
 )
+from telemetry.flight_session import FlightSession
+from frame_processing.adaptive_keyframes import AdaptiveKeyframeEngine
 
 
 def run_pipeline(
     input_path: str | Path,
     output_dir: str | Path,
     gps_log_path: str | Path | None = None,
+    telemetry_path: str | Path | None = None,
+    allow_simulated_gps: bool = False,
     default_origin: tuple[float, float, float] = (12.9716, 77.5946, 900.0),
     run_dense: bool = False,
     reuse_sparse: str | bool = False,
+    use_adaptive_keyframes: bool = False,
+    run_geo_constrained_ba: bool = False,
+    geo_ba_gps_weight: float = 1.0,
+    run_uv_texture_mapping: bool = False,
 ) -> dict:
     """Executes the full SIH26158 3D reconstruction pipeline end-to-end.
 
@@ -66,11 +77,31 @@ def run_pipeline(
     output_dir : str | Path
         Target root directory for all deliverables.
     gps_log_path : str | Path | None
-        Path to GPS log (CSV or JSON), or None to use estimated local ENU.
+        Legacy path to a raw GPS log (CSV or JSON). Prefer `telemetry_path`.
+    telemetry_path : str | Path | None
+        Path to a `telemetry.FlightSession` JSON (real GPS/IMU/barometer, camera
+        calibration, explicit provenance). Preferred over `gps_log_path`.
+    allow_simulated_gps : bool
+        Explicit opt-in to fabricate GPS fixes anchored at `default_origin` when no
+        real telemetry is supplied. Per ROADMAP.md Phase A's strict provenance rule,
+        this is OFF by default — with no real GPS and this flag unset, the pipeline
+        runs in LOCAL_METRIC mode (arbitrary-scale, ungeoreferenced output) rather
+        than silently inventing coordinates.
     default_origin : tuple[float, float, float]
-        (lat, lon, alt_m) used for georeferencing if no GPS log is supplied.
+        (lat, lon, alt_m) used only when `allow_simulated_gps=True`.
     run_dense : bool
         Whether to run dense Poisson MVS reconstruction (slower, GPU intensive).
+    use_adaptive_keyframes : bool
+        Use the multi-criteria AdaptiveKeyframeEngine (sharpness, exposure, overlap)
+        instead of fixed-interval extraction + blur/duplicate filtering, when the
+        input is a video.
+    run_geo_constrained_ba : bool
+        Run Phase C's pose-only geo-constrained refinement (reprojection + GPS-prior
+        joint optimization) after GPS alignment, as a diagnostic trajectory
+        comparison. Written to `refined_trajectory.json` alongside the other
+        deliverables rather than overwriting the primary georeferenced outputs,
+        since it only refines camera positions (not points or orientation) — see
+        `src/reconstruction/geo_constrained_ba.py` for the documented scope limit.
 
     Returns
     -------
@@ -106,20 +137,51 @@ def run_pipeline(
         )
         print(f"  Ingested {len(frame_paths)} frames from directory: {input_path}")
     elif input_path.is_file() and input_path.suffix.lower() in (".mp4", ".mov", ".avi", ".mkv"):
-        from frame_processing.run_phase1 import run_phase1
-        print(f"  Extracting and quality-filtering keyframes from video: {input_path}")
-        phase1_res = run_phase1(
-            video_path=str(input_path),
-            work_dir=str(output_dir / "phase1"),
-            target_extract_fps=2.0,
-            run_segmentation=False,
-        )
-        kept_dir = output_dir / "phase1" / "kept_frames"
-        frame_paths = sorted(
-            p for p in kept_dir.iterdir()
-            if p.suffix.lower() in (".jpg", ".jpeg", ".png")
-        )
-        print(f"  Retained {len(frame_paths)} sharp, non-duplicate keyframes after quality filtering")
+        if use_adaptive_keyframes:
+            print(f"  Adaptive keyframe selection (sharpness/exposure/overlap) from video: {input_path}")
+            kept_dir = output_dir / "phase1" / "kept_frames"
+            kept_dir.mkdir(parents=True, exist_ok=True)
+            cap = cv2.VideoCapture(str(input_path))
+            src_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+            candidate_stride = max(1, round(src_fps / 5.0))  # 5 candidate fps into the scorer
+            frames, timestamps = [], []
+            raw_idx = 0
+            while True:
+                ok, frame = cap.read()
+                if not ok:
+                    break
+                if raw_idx % candidate_stride == 0:
+                    frames.append(frame)
+                    timestamps.append(raw_idx / src_fps)
+                raw_idx += 1
+            cap.release()
+            engine = AdaptiveKeyframeEngine()
+            scores = engine.select_keyframes(frames, timestamps)
+            frame_paths = []
+            for s in scores:
+                if not s.is_selected:
+                    continue
+                out_path = kept_dir / f"frame_{s.frame_idx:06d}.jpg"
+                cv2.imwrite(str(out_path), frames[s.frame_idx])
+                frame_paths.append(out_path)
+            n_rejected = sum(1 for s in scores if not s.is_selected)
+            print(f"  Retained {len(frame_paths)}/{len(scores)} candidate frames "
+                  f"({n_rejected} rejected: blur/exposure/insufficient baseline)")
+        else:
+            from frame_processing.run_phase1 import run_phase1
+            print(f"  Extracting and quality-filtering keyframes from video: {input_path}")
+            phase1_res = run_phase1(
+                video_path=str(input_path),
+                work_dir=str(output_dir / "phase1"),
+                target_extract_fps=2.0,
+                run_segmentation=False,
+            )
+            kept_dir = output_dir / "phase1" / "kept_frames"
+            frame_paths = sorted(
+                p for p in kept_dir.iterdir()
+                if p.suffix.lower() in (".jpg", ".jpeg", ".png")
+            )
+            print(f"  Retained {len(frame_paths)} sharp, non-duplicate keyframes after quality filtering")
     else:
         raise ValueError(f"Unsupported input: {input_path}")
 
@@ -221,25 +283,117 @@ def run_pipeline(
     # Stage 5: GPS / Scale Georeferencing
     # ---------------------------------------------------------
     print("\n[Stage 5/7] Georeferencing & scale alignment...")
-    origin_lat, origin_lon, origin_alt = default_origin
     gps_fixes: list[GpsFix] = []
+    telemetry_provenance = "NONE"
 
-    if gps_log_path and Path(gps_log_path).exists():
+    if telemetry_path and Path(telemetry_path).exists():
+        session = FlightSession.load_json(telemetry_path)
+        session.synchronize_telemetry()
+        telemetry_provenance = session.provenance.value
+        frames_by_name = {f.image_filename: f for f in session.frames}
+        for p in frame_paths:
+            f = frames_by_name.get(p.name)
+            if f is not None and f.gps is not None:
+                gps_fixes.append(GpsFix(p.name, f.gps.latitude, f.gps.longitude, f.gps.altitude_m))
+        print(f"  Loaded FlightSession telemetry (provenance={telemetry_provenance}): "
+              f"{len(gps_fixes)}/{len(frame_paths)} frames have real GPS fixes")
+    elif gps_log_path and Path(gps_log_path).exists():
         from geo.flight_metadata import parse_flight_log
-        log_fixes = parse_flight_log(gps_log_path)
-        gps_fixes = log_fixes
-    else:
-        # Generate simulated GPS fixes from poses anchored at default origin
-        print("  Using simulated GPS fixes anchored at default flight origin.")
+        gps_fixes = parse_flight_log(gps_log_path)
+        telemetry_provenance = "REAL"
+    elif allow_simulated_gps:
+        print("  [Notice] No real telemetry supplied — using SIMULATED GPS fixes "
+              "anchored at default flight origin (explicitly requested via allow_simulated_gps).")
+        origin_lat, origin_lon, origin_alt = default_origin
         for pose in poses:
             name = Path(pose.frame_path).name
             cam_center = -pose.rotation.T @ pose.translation
             lat, lon, alt = enu_to_gps(cam_center[None, :], origin_lat, origin_lon, origin_alt)[0]
             gps_fixes.append(GpsFix(name, lat, lon, alt))
+        telemetry_provenance = "SIMULATED"
 
-    align_result = align_geometry_to_gps(clean_geom, gps_fixes)
-    print(f"  Alignment: Scale factor = {align_result.scale_factor:.4f}")
-    print(f"  Mean GPS residual = {align_result.mean_alignment_residual_m:.3f} m")
+    has_geo = len(gps_fixes) >= 3
+    if has_geo:
+        align_result = align_geometry_to_gps(clean_geom, gps_fixes)
+        print(f"  Alignment: Scale factor = {align_result.scale_factor:.4f}")
+        print(f"  Mean GPS residual = {align_result.mean_alignment_residual_m:.3f} m")
+    else:
+        # Phase A provenance rule: no real/opted-in GPS -> LOCAL_METRIC mode. Points
+        # stay in COLMAP's own arbitrary-scale frame; no coordinate is invented.
+        print("  [LOCAL_METRIC MODE] No real GPS available (and allow_simulated_gps=False) — "
+              "georeferencing skipped. Output points remain in an arbitrary, ungeoreferenced "
+              "SfM-scale frame. Pass --telemetry, --gps-log, or --allow-simulated-gps to georeference.")
+        from types import SimpleNamespace
+        align_result = SimpleNamespace(
+            points_enu=clean_points,
+            aligned_poses=poses,
+            scale_factor=None,
+            origin_lat=None,
+            origin_lon=None,
+            origin_alt_m=None,
+            n_gps_correspondences=0,
+            mean_alignment_residual_m=None,
+        )
+
+    # ---------------------------------------------------------
+    # Stage 5.5 [optional] — Phase C: Geo-Constrained Pose Refinement
+    # ---------------------------------------------------------
+    geo_ba_report: dict | None = None
+    if has_geo and run_geo_constrained_ba:
+        print("\n[Stage 5.5] Geo-constrained pose refinement (diagnostic trajectory)...")
+        point_id_to_aligned_xyz = dict(zip(clean_point_ids, align_result.points_enu))
+        sparse_image_by_name = {Path(img["name"]).name: img for img in sparse_model["images"].values()}
+
+        camera_names, rotations, intrinsics_list, observations = [], [], [], []
+        for pose in align_result.aligned_poses:
+            name = Path(pose.frame_path).name
+            src_img = sparse_image_by_name.get(name)
+            obs = []
+            if src_img is not None:
+                for px, py, pid in src_img["points2d"]:
+                    xyz = point_id_to_aligned_xyz.get(pid)
+                    if xyz is not None:
+                        obs.append((px, py, xyz))
+            camera_names.append(name)
+            rotations.append(pose.rotation)
+            intrinsics_list.append(pose.intrinsics)
+            observations.append(obs)
+
+        gps_priors_enu = {}
+        for gf in gps_fixes:
+            if gf.frame_name in camera_names:
+                e, n, u = lla_to_enu(gf.lat, gf.lon, gf.alt_m, align_result.origin_lat, align_result.origin_lon, align_result.origin_alt_m)
+                gps_priors_enu[gf.frame_name] = np.array([e, n, u])
+
+        ba_result = refine_poses_with_gps_priors(
+            camera_names=camera_names,
+            rotations=rotations,
+            intrinsics=intrinsics_list,
+            initial_centers=list(align_result.camera_centers_enu),
+            observations=observations,
+            gps_priors_enu=gps_priors_enu,
+            gps_weight=geo_ba_gps_weight,
+        )
+        print(f"  Refined {ba_result.n_cameras_refined} camera positions over {ba_result.n_observations} observations")
+        print(f"  Mean reprojection error: {ba_result.mean_reprojection_error_px:.3f} px, "
+              f"mean GPS residual: {ba_result.mean_gps_residual_m:.3f} m")
+        geo_ba_report = {
+            "n_cameras_refined": ba_result.n_cameras_refined,
+            "n_observations": ba_result.n_observations,
+            "mean_reprojection_error_px": ba_result.mean_reprojection_error_px,
+            "mean_gps_residual_m": ba_result.mean_gps_residual_m,
+            "gps_weight_used": geo_ba_gps_weight,
+        }
+        refined_trajectory = {
+            name: {"enu": ba_result.refined_centers[name].tolist()} for name in camera_names
+        }
+        (deliverables_dir / "refined_trajectory.json").write_text(json.dumps({
+            "note": "Diagnostic pose-only geo-constrained refinement (Phase C). Does NOT "
+                    "replace the primary georeferenced point cloud/mesh — camera positions only.",
+            "summary": geo_ba_report,
+            "trajectory": refined_trajectory,
+        }, indent=2))
+        print(f"  [Deliverable] Geo-constrained trajectory: {deliverables_dir / 'refined_trajectory.json'}")
 
     # ---------------------------------------------------------
     # Stage 6: Semantic Class Tagging & Confidence
@@ -256,7 +410,7 @@ def run_pipeline(
     print("\n[Stage 7/7] Generating GIS & 3D Deliverables...")
 
     # 1. Point Clouds: .las and .laz
-    epsg_code = utm_epsg_for_lonlat(align_result.origin_lon, align_result.origin_lat)
+    epsg_code = utm_epsg_for_lonlat(align_result.origin_lon, align_result.origin_lat) if has_geo else None
     las_path = deliverables_dir / "classified_pointcloud.las"
     laz_path = deliverables_dir / "classified_pointcloud.laz"
     export_point_cloud_to_las(
@@ -278,38 +432,43 @@ def run_pipeline(
     print(f"  [Deliverable] ASPRS LAS: {las_path} ({las_path.stat().st_size / 1024:.1f} KB)")
     print(f"  [Deliverable] ASPRS LAZ: {laz_path} ({laz_path.stat().st_size / 1024:.1f} KB)")
 
-    # 2. Elevation Rasters (DSM / DTM)
-    dsm_path = deliverables_dir / "dsm.tif"
-    dtm_path = deliverables_dir / "dtm.tif"
-    dsm_dtm_stats = export_dsm_dtm(
-        points_enu=align_result.points_enu,
-        class_names=class_names,
-        origin_lat=align_result.origin_lat,
-        origin_lon=align_result.origin_lon,
-        dsm_out_path=str(dsm_path),
-        dtm_out_path=str(dtm_path),
-        cell_size_m=0.5,
-    )
-    print(f"  [Deliverable] DSM GeoTIFF: {dsm_path} (Grid: {dsm_dtm_stats['dsm_shape']})")
-    print(f"  [Deliverable] DTM GeoTIFF: {dtm_path}")
+    # 2. Elevation Rasters (DSM / DTM) — meaningless in an ungeoreferenced local frame
+    dsm_dtm_stats: dict = {}
+    if has_geo:
+        dsm_path = deliverables_dir / "dsm.tif"
+        dtm_path = deliverables_dir / "dtm.tif"
+        dsm_dtm_stats = export_dsm_dtm(
+            points_enu=align_result.points_enu,
+            class_names=class_names,
+            origin_lat=align_result.origin_lat,
+            origin_lon=align_result.origin_lon,
+            dsm_out_path=str(dsm_path),
+            dtm_out_path=str(dtm_path),
+            cell_size_m=0.5,
+        )
+        print(f"  [Deliverable] DSM GeoTIFF: {dsm_path} (Grid: {dsm_dtm_stats['dsm_shape']})")
+        print(f"  [Deliverable] DTM GeoTIFF: {dtm_path}")
 
-    # 3. Orthomosaic
-    z_ref = estimate_ground_z_ref(align_result.points_enu, class_names)
-    x_min, y_min = align_result.points_enu[:, :2].min(axis=0)
-    x_max, y_max = align_result.points_enu[:, :2].max(axis=0)
-    ortho_img, ortho_cnt = build_orthomosaic(
-        poses=align_result.aligned_poses,
-        image_dir=image_folder,
-        x_min=float(x_min),
-        x_max=float(x_max),
-        y_min=float(y_min),
-        y_max=float(y_max),
-        z_ref=z_ref,
-        gsd_m=0.2,
-    )
-    ortho_path = deliverables_dir / "orthomosaic.png"
-    cv2.imwrite(str(ortho_path), ortho_img)
-    print(f"  [Deliverable] Orthomosaic: {ortho_path} (Size: {ortho_img.shape[1]}x{ortho_img.shape[0]})")
+        # 3. Orthomosaic
+        z_ref = estimate_ground_z_ref(align_result.points_enu, class_names)
+        x_min, y_min = align_result.points_enu[:, :2].min(axis=0)
+        x_max, y_max = align_result.points_enu[:, :2].max(axis=0)
+        ortho_img, ortho_cnt = build_orthomosaic(
+            poses=align_result.aligned_poses,
+            image_dir=image_folder,
+            x_min=float(x_min),
+            x_max=float(x_max),
+            y_min=float(y_min),
+            y_max=float(y_max),
+            z_ref=z_ref,
+            gsd_m=0.2,
+        )
+        ortho_path = deliverables_dir / "orthomosaic.png"
+        cv2.imwrite(str(ortho_path), ortho_img)
+        print(f"  [Deliverable] Orthomosaic: {ortho_path} (Size: {ortho_img.shape[1]}x{ortho_img.shape[0]})")
+    else:
+        print("  [LOCAL_METRIC MODE] Skipping DSM/DTM/orthomosaic — these require a real "
+              "georeferenced, metrically-scaled point cloud, which is not available.")
 
     # 4. Metric Quality Report
     from dataclasses import asdict
@@ -318,12 +477,15 @@ def run_pipeline(
     class_breakdown = [asdict(b) for b in breakdowns]
     report_data = {
         "dataset": str(input_path),
+        "telemetry_provenance": telemetry_provenance,
+        "georeferenced": has_geo,
         "total_input_frames": len(frame_paths),
         "registered_frames": n_reg_images,
         "registration_rate_pct": float(n_reg_images / len(frame_paths) * 100),
         "sparse_points": clean_points.shape[0],
-        "scale_factor": float(align_result.scale_factor),
-        "mean_gps_residual_m": float(align_result.mean_alignment_residual_m),
+        "scale_factor": float(align_result.scale_factor) if has_geo else None,
+        "mean_gps_residual_m": float(align_result.mean_alignment_residual_m) if has_geo else None,
+        "mean_reprojection_error_px": float(clean_reproj_err.mean()) if len(clean_reproj_err) else None,
         "high_confidence_points_pct": float((conf_tiers == 2).mean() * 100),
         "class_breakdown": class_breakdown,
         "volumetric_metrics": dsm_dtm_stats.get("volumetric", {}),
@@ -332,35 +494,61 @@ def run_pipeline(
             "lon": align_result.origin_lon,
             "alt_m": align_result.origin_alt_m,
             "epsg": epsg_code,
-        },
+        } if has_geo else None,
+        "geo_constrained_ba": geo_ba_report,
     }
     report_path.write_text(json.dumps(report_data, indent=2))
     print(f"  [Deliverable] Metric Report: {report_path}")
 
-    # 5. CesiumJS Web Viewer Bundle
-    wgs84_coords = enu_to_gps(
-        align_result.points_enu,
-        align_result.origin_lat,
-        align_result.origin_lon,
-        align_result.origin_alt_m,
-    )
-    viewer_points = []
-    for i in range(wgs84_coords.shape[0]):
-        viewer_points.append({
-            "lat": float(wgs84_coords[i, 0]),
-            "lon": float(wgs84_coords[i, 1]),
-            "alt": float(wgs84_coords[i, 2]),
-            "class": class_names[i],
-            "confidence": tier_names[i],
-        })
-    (viewer_dir / "points.json").write_text(json.dumps({
-        "origin": {"lat": align_result.origin_lat, "lon": align_result.origin_lon, "alt": align_result.origin_alt_m},
-        "n_points": len(viewer_points),
-        "points": viewer_points,
-    }))
-    print(f"  [Viewer] Prepared CesiumJS point bundle: {viewer_dir / 'points.json'}")
+    # 5. CesiumJS Web Viewer Bundle — needs real lat/lon, so only in georeferenced mode
+    if has_geo:
+        wgs84_coords = enu_to_gps(
+            align_result.points_enu,
+            align_result.origin_lat,
+            align_result.origin_lon,
+            align_result.origin_alt_m,
+        )
+        viewer_points = []
+        for i in range(wgs84_coords.shape[0]):
+            viewer_points.append({
+                "lat": float(wgs84_coords[i, 0]),
+                "lon": float(wgs84_coords[i, 1]),
+                "alt": float(wgs84_coords[i, 2]),
+                "class": class_names[i],
+                "confidence": tier_names[i],
+            })
+        origin_dict = {"lat": align_result.origin_lat, "lon": align_result.origin_lon, "alt": align_result.origin_alt_m}
+        (viewer_dir / "points.json").write_text(json.dumps({
+            "origin": origin_dict,
+            "origin_lla": origin_dict,
+            "n_points": len(viewer_points),
+            "classes": sorted(set(class_names.tolist())),
+            "points": viewer_points,
+        }))
+        print(f"  [Viewer] Prepared CesiumJS point bundle: {viewer_dir / 'points.json'}")
 
-    # 6. Scaled 3D Mesh Export
+        # Real per-frame flight trajectory (registered cameras only) — replaces any
+        # synthetic/fabricated path the viewer might otherwise need to invent.
+        traj_wgs84 = enu_to_gps(
+            align_result.camera_centers_enu,
+            align_result.origin_lat, align_result.origin_lon, align_result.origin_alt_m,
+        )
+        trajectory_points = [
+            {"frame": Path(pose.frame_path).name, "lat": float(traj_wgs84[i, 0]),
+             "lon": float(traj_wgs84[i, 1]), "alt": float(traj_wgs84[i, 2])}
+            for i, pose in enumerate(align_result.aligned_poses)
+        ]
+        (viewer_dir / "trajectory.json").write_text(json.dumps({
+            "origin": origin_dict, "n_frames": len(trajectory_points), "trajectory": trajectory_points,
+        }))
+        print(f"  [Viewer] Prepared real flight trajectory: {viewer_dir / 'trajectory.json'} "
+              f"({len(trajectory_points)} frames)")
+    else:
+        print("  [LOCAL_METRIC MODE] Skipping CesiumJS viewer bundle (requires real lat/lon).")
+
+    # 6. Scaled 3D Mesh Export (scale factor applied only when georeferenced; otherwise
+    # the mesh stays in COLMAP's own arbitrary units, clearly not real-world meters)
+    mesh_scale = float(align_result.scale_factor) if has_geo else 1.0
     mesh_candidates = [
         reconstruction_dir / "dense" / "meshed-poisson.ply",
         Path("outputs/phase2_colmap_test/dense/meshed-poisson.ply"),
@@ -371,7 +559,7 @@ def run_pipeline(
                 import open3d as o3d
                 mesh = o3d.io.read_triangle_mesh(str(mc))
                 if len(mesh.vertices) > 0:
-                    verts = np.asarray(mesh.vertices) * float(align_result.scale_factor)
+                    verts = np.asarray(mesh.vertices) * mesh_scale
                     mesh.vertices = o3d.utility.Vector3dVector(verts)
                     mesh.compute_vertex_normals()
                     glb_out = viewer_dir / "mesh_scaled.glb"
@@ -379,6 +567,34 @@ def run_pipeline(
                     shutil.copy(str(glb_out), deliverables_dir / "mesh_textured.glb")
                     shutil.copy(str(mc), deliverables_dir / "mesh_textured.ply")
                     print(f"  [Deliverable] Scaled 3D Mesh: {deliverables_dir / 'mesh_textured.glb'}")
+
+                    # 6b. [optional] Phase F: real multi-view UV texture bake, as a
+                    # separate file — the vertex-colored export above is already the
+                    # tested default; this is an additive, opt-in upgrade.
+                    if run_uv_texture_mapping:
+                        try:
+                            faces = np.asarray(mesh.triangles, dtype=np.int32)
+                            sample_img = cv2.imread(str(next(image_folder.glob("*"))))
+                            img_h, img_w = sample_img.shape[:2]
+                            cam_views = []
+                            for i, pose in enumerate(poses):
+                                img_path = image_folder / Path(pose.frame_path).name
+                                if not img_path.exists():
+                                    continue
+                                cam_views.append(CameraView(
+                                    camera_idx=i,
+                                    image_path=img_path,
+                                    rotation=pose.rotation,
+                                    translation=pose.translation * mesh_scale,
+                                    intrinsics=pose.intrinsics,
+                                    width=img_w,
+                                    height=img_h,
+                                ))
+                            uv_glb_out = deliverables_dir / "mesh_uv_textured.glb"
+                            UVTextureMapper.bake_and_export_glb(verts, faces, cam_views, uv_glb_out)
+                            print(f"  [Deliverable] UV-textured 3D Mesh: {uv_glb_out}")
+                        except Exception as e:
+                            print(f"  [Notice] UV texture mapping skipped ({e})")
                     break
             except Exception as e:
                 print(f"  [Notice] Mesh conversion skipped ({e})")
@@ -395,7 +611,19 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="SIH26158 Single-Pass Drone 3D Reconstruction Pipeline")
     parser.add_argument("--input", required=True, help="Input video file or directory of image frames")
     parser.add_argument("--output-dir", default="outputs/pipeline_run", help="Target output directory")
-    parser.add_argument("--gps-log", default=None, help="Optional path to GPS log file")
+    parser.add_argument("--gps-log", default=None, help="Legacy path to a raw GPS log file")
+    parser.add_argument("--telemetry", default=None, help="Path to a FlightSession telemetry JSON (preferred)")
+    parser.add_argument("--allow-simulated-gps", action="store_true",
+                         help="Explicitly allow fabricated GPS when no real telemetry is given "
+                              "(default: LOCAL_METRIC mode, no invented coordinates)")
+    parser.add_argument("--adaptive-keyframes", action="store_true",
+                         help="Use multi-criteria adaptive keyframe selection instead of fixed-interval extraction")
+    parser.add_argument("--geo-constrained-ba", action="store_true",
+                         help="Run Phase C diagnostic geo-constrained pose refinement after alignment")
+    parser.add_argument("--geo-ba-gps-weight", type=float, default=1.0,
+                         help="How strongly geo-constrained BA trusts GPS over reprojection (see docstring)")
+    parser.add_argument("--uv-texture-mapping", action="store_true",
+                         help="Bake a real multi-view UV-textured GLB (Phase F) alongside the default vertex-colored mesh")
     parser.add_argument("--dense", action="store_true", help="Run dense Poisson meshing")
     parser.add_argument("--reuse-sparse", default=None, help="Reuse existing sparse reconstruction (path or flag)")
     args = parser.parse_args()
@@ -404,6 +632,12 @@ if __name__ == "__main__":
         input_path=args.input,
         output_dir=args.output_dir,
         gps_log_path=args.gps_log,
+        telemetry_path=args.telemetry,
+        allow_simulated_gps=args.allow_simulated_gps,
         run_dense=args.dense,
         reuse_sparse=args.reuse_sparse or False,
+        use_adaptive_keyframes=args.adaptive_keyframes,
+        run_geo_constrained_ba=args.geo_constrained_ba,
+        geo_ba_gps_weight=args.geo_ba_gps_weight,
+        run_uv_texture_mapping=args.uv_texture_mapping,
     )

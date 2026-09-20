@@ -110,6 +110,16 @@ def enu_to_gps(points_enu: np.ndarray, origin_lat: float, origin_lon: float, ori
     return np.stack([np.array(lat), np.array(lon), np.array(alt)], axis=1)
 
 
+def lla_to_enu(lat: float, lon: float, alt_m: float, origin_lat: float, origin_lon: float, origin_alt_m: float) -> tuple[float, float, float]:
+    """Converts a single geodetic coordinate (lat, lon, alt_m) to local ENU meters relative to origin."""
+    origin_ecef = np.array(_ECEF_FROM_GPS.transform(origin_lon, origin_lat, origin_alt_m))
+    rot = _enu_rotation_matrix(origin_lat, origin_lon)
+    x, y, z = _ECEF_FROM_GPS.transform(lon, lat, alt_m)
+    ecef = np.array([x, y, z])
+    enu = rot @ (ecef - origin_ecef)
+    return float(enu[0]), float(enu[1]), float(enu[2])
+
+
 def align_geometry_to_gps(geometry: GeometryEstimate, gps_fixes: list[GpsFix]) -> GeoAlignedResult:
     """Match COLMAP poses to GPS fixes by frame filename, align, and rescale the full
     point cloud + camera trajectory into real-world ENU meters."""

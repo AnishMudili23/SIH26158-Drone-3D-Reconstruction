@@ -8,6 +8,7 @@ venv/
 # Data & large artifacts (never commit raw datasets or model outputs)
 data/raw/
 data/datasets/
+/datasets/
 outputs/
 *.mp4
 *.mov
