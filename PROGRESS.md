@@ -756,5 +756,30 @@ stopping here.
    - Added `tests/test_pipeline.py`.
    - Total automated test suite expanded to **35 passing tests**.
 
+---
+
+## Continuous Improvement — Cycle 4: Shared Raster Bounds Alignment, Volumetric & Relief Metrics, and Dynamic Cesium Viewer
+
+**Date**: 2026-09-20  
+**Target**: Resolve raster spatial misalignment between DSM and DTM elevation models, implement quantitative volumetric metrics per the SIH evaluation criteria, and enhance the CesiumJS viewer with dynamic dataset switching.
+
+### Actions & Findings:
+1. **Identified & Fixed Real Raster Misalignment Bug**:
+   - Discovered that `grid_elevation` independently derived bounding boxes for DSM (computed on all points) and DTM (computed only on ground-like points). Because ground points spanned a slightly smaller horizontal extent, DSM yielded shape `(8, 20)` while DTM yielded `(8, 19)`, causing array broadcasting errors and spatial offsets in GIS viewers.
+   - Refactored `grid_elevation` in [`src/exports/dsm_dtm.py`](file:///d:/SIH26158/src/exports/dsm_dtm.py) to accept explicit `bounds=(x_min, x_max, y_min, y_max)`, ensuring both elevation rasters share identical dimensions, pixel origins, and GeoTIFF geotransforms.
+2. **Volumetric & Relief Metric Analysis**:
+   - Implemented `compute_volumetric_metrics` in `src/exports/dsm_dtm.py` to calculate cut/fill and above-ground structure volume:
+     - Integral $\sum (\text{DSM} - \text{DTM}) \times \text{cell\_area}$ for elevated structures.
+     - Elevated footprint surface area ($m^2$), mean structure height ($m$), and peak building height ($m$).
+   - Embedded these volumetric stats into [`confidence_report.json`](file:///d:/SIH26158/outputs/demo_pipeline_run/deliverables/confidence_report.json) alongside linear measurements and confidence bounds.
+   - Verified on demo pipeline run: $1.489\text{ m}^3$ building volume, $1.5\text{ m}^2$ footprint, $0.993\text{ m}$ mean height (matching 1m ground-truth synthetic structures).
+3. **CesiumJS Web Viewer Enhancement**:
+   - Added dynamic dataset selection to [`src/viewer/cesium_viewer.html`](file:///d:/SIH26158/src/viewer/cesium_viewer.html) supporting on-the-fly switching between pipeline runs (`demo_pipeline_run`, `phase8_viewer_data`, `video_pipeline_test`), as well as URL parameter queries (`?data=...`).
+   - Added primitive cleanup and camera recentering on dataset change.
+4. **Test Suite Expansion**:
+   - Added `test_compute_volumetric_metrics` in [`tests/test_dsm_dtm.py`](file:///d:/SIH26158/tests/test_dsm_dtm.py).
+   - Test suite now stands at **36 automated tests passing**.
+
+
 
 
