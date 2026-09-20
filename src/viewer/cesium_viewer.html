@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SIH26158 — Georeferenced Viewer (Phase 8)</title>
+<script src="https://cesium.com/downloads/cesiumjs/releases/1.120/Build/Cesium/Cesium.js"></script>
+<link href="https://cesium.com/downloads/cesiumjs/releases/1.120/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+<style>
+  html, body, #cesiumContainer { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; }
+  #panel {
+    position: absolute; top: 10px; left: 10px; color: #eee; background: rgba(20,20,20,0.85);
+    padding: 12px 16px; border-radius: 6px; font-family: sans-serif; font-size: 13px; line-height: 1.6;
+    max-width: 320px; z-index: 10;
+  }
+  #panel b { color: #7ec8ff; }
+  #panel label { display: block; cursor: pointer; }
+  #panel input[type=checkbox] { margin-right: 6px; }
+  .swatch { display:inline-block; width:10px; height:10px; margin-right:6px; border-radius:2px; }
+  select, button { margin-top: 4px; }
+  .warn { color: #fc6; font-size: 12px; }
+</style>
+</head>
+<body>
+<div id="cesiumContainer"></div>
+<div id="panel">
+  <div><b>SIH26158 — Phase 8 Georeferenced Viewer</b></div>
+  <div id="status">Loading…</div>
+  <div style="margin-top:8px;"><b>Class layers</b></div>
+  <div id="class-toggles"></div>
+  <div style="margin-top:8px;">
+    <label><input type="checkbox" id="confidence-toggle"> Show confidence overlay (instead of class colors)</label>
+  </div>
+  <div style="margin-top:8px;">
+    <b>Measure:</b> click two points on the model/point cloud.
+    <div id="measurement"></div>
+    <button id="reset-btn">Reset</button>
+  </div>
+  <div class="warn" style="margin-top:8px;">
+    Per CLAUDE.md project policy: this is a real reconstruction, not verified ground
+    truth. Use the confidence overlay before trusting any specific region.
+  </div>
+</div>
+
+<script>
+Cesium.Ion.defaultAccessToken = undefined; // no Ion account in this session — use only
+                                            // token-free providers (no Bing/ion imagery).
+
+const viewer = new Cesium.Viewer("cesiumContainer", {
+  baseLayerPicker: false,
+  geocoder: false,
+  homeButton: false,
+  sceneModePicker: false,
+  navigationHelpButton: false,
+  animation: false,
+  timeline: false,
+  fullscreenButton: false,
+  imageryProvider: false,       // no token-gated imagery; plain ellipsoid instead
+  terrainProvider: new Cesium.EllipsoidTerrainProvider(),
+});
+viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString("#223322");
+
+const CLASS_COLORS = {
+  "Building": Cesium.Color.fromCssColorString("#e07a5f"),
+  "Road": Cesium.Color.fromCssColorString("#8d99ae"),
+  "Tree": Cesium.Color.fromCssColorString("#588157"),
+  "Low vegetation": Cesium.Color.fromCssColorString("#a3b18a"),
+  "Moving car": Cesium.Color.fromCssColorString("#ffb703"),
+  "Static car": Cesium.Color.fromCssColorString("#fb8500"),
+  "Human": Cesium.Color.fromCssColorString("#ff006e"),
+  "Background clutter": Cesium.Color.fromCssColorString("#6c757d"),
+};
+const CONFIDENCE_COLORS = {
+  "high": Cesium.Color.fromCssColorString("#2ecc71"),
+  "medium": Cesium.Color.fromCssColorString("#f1c40f"),
+  "low": Cesium.Color.fromCssColorString("#e74c3c"),
+};
+
+let showConfidence = false;
+const pointsByClass = {}; // class name -> Cesium.PointPrimitiveCollection
+let allPointRecords = [];
+
+async function loadData() {
+  const resp = await fetch("/outputs/phase8_viewer_data/points.json");
+  const data = await resp.json();
+  document.getElementById("status").textContent = `Loaded ${data.n_points} points, origin (${data.origin.lat.toFixed(5)}, ${data.origin.lon.toFixed(5)})`;
+
+  const originCartesian = Cesium.Cartesian3.fromDegrees(data.origin.lon, data.origin.lat, data.origin.alt);
+
+  // Fly to the data's actual centroid, not the georeference origin (which is just
+  // frame 0's own position — confirmed by direct experiment to sit at the edge of the
+  // point cloud's real extent, not its center, leaving content hugging one corner of
+  // the view and, at this default camera distance, partly hidden behind Cesium's own
+  // bottom credit bar).
+  let sumLat = 0, sumLon = 0, sumAlt = 0;
+  for (const p of data.points) { sumLat += p.lat; sumLon += p.lon; sumAlt += p.alt; }
+  const n = data.points.length;
+  const centroidLon = sumLon / n, centroidLat = sumLat / n, centroidAlt = sumAlt / n;
+
+  viewer.camera.flyTo({
+    destination: Cesium.Cartesian3.fromDegrees(centroidLon, centroidLat, centroidAlt + 120),
+    orientation: { heading: 0, pitch: Cesium.Math.toRadians(-80), roll: 0 },
+    duration: 0,
+  });
+
+  const uniqueClasses = [...new Set(data.points.map(p => p.class))];
+  const toggleContainer = document.getElementById("class-toggles");
+  for (const cls of uniqueClasses) {
+    pointsByClass[cls] = viewer.scene.primitives.add(new Cesium.PointPrimitiveCollection());
+    const color = CLASS_COLORS[cls] || Cesium.Color.WHITE;
+    const swatch = document.createElement("span");
+    swatch.className = "swatch";
+    swatch.style.background = color.toCssColorString();
+    const label = document.createElement("label");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = true;
+    checkbox.addEventListener("change", () => {
+      pointsByClass[cls].show = checkbox.checked;
+    });
+    label.appendChild(checkbox);
+    label.appendChild(swatch);
+    label.appendChild(document.createTextNode(`${cls} (${data.points.filter(p => p.class === cls).length})`));
+    toggleContainer.appendChild(label);
+  }
+
+  for (const p of data.points) {
+    const position = Cesium.Cartesian3.fromDegrees(p.lon, p.lat, p.alt);
+    const color = showConfidence ? CONFIDENCE_COLORS[p.confidence] : (CLASS_COLORS[p.class] || Cesium.Color.WHITE);
+    const primitive = pointsByClass[p.class].add({
+      position, color, pixelSize: 4,
+    });
+    allPointRecords.push({ primitive, cls: p.class, confidence: p.confidence });
+  }
+
+  try {
+    const model = await Cesium.Model.fromGltfAsync({
+      url: "/outputs/phase8_viewer_data/mesh_scaled.glb",
+      modelMatrix: Cesium.Transforms.eastNorthUpToFixedFrame(originCartesian),
+    });
+    viewer.scene.primitives.add(model);
+  } catch (e) {
+    console.error("Mesh load failed:", e);
+    document.getElementById("status").textContent += " (mesh failed to load — see console)";
+  }
+}
+
+document.getElementById("confidence-toggle").addEventListener("change", (e) => {
+  showConfidence = e.target.checked;
+  for (const rec of allPointRecords) {
+    rec.primitive.color = showConfidence ? CONFIDENCE_COLORS[rec.confidence] : (CLASS_COLORS[rec.cls] || Cesium.Color.WHITE);
+  }
+});
+
+// --- Measurement ---
+const measurementEl = document.getElementById("measurement");
+let measurePoints = [];
+let measureEntities = [];
+
+function resetMeasurement() {
+  measurePoints = [];
+  for (const e of measureEntities) viewer.entities.remove(e);
+  measureEntities = [];
+  measurementEl.textContent = "";
+}
+document.getElementById("reset-btn").addEventListener("click", resetMeasurement);
+
+const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+handler.setInputAction((click) => {
+  const cartesian = viewer.scene.pickPosition(click.position);
+  if (!Cesium.defined(cartesian)) return;
+
+  if (measurePoints.length >= 2) resetMeasurement();
+  measurePoints.push(cartesian);
+  const marker = viewer.entities.add({
+    position: cartesian,
+    point: { pixelSize: 10, color: Cesium.Color.RED, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+  });
+  measureEntities.push(marker);
+
+  if (measurePoints.length === 2) {
+    const distance = Cesium.Cartesian3.distance(measurePoints[0], measurePoints[1]);
+    const line = viewer.entities.add({
+      polyline: {
+        positions: measurePoints,
+        width: 5,
+        material: Cesium.Color.YELLOW,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        arcType: Cesium.ArcType.NONE,
+        clampToGround: false,
+      },
+    });
+    measureEntities.push(line);
+    measurementEl.innerHTML = `<b>Distance: ${distance.toFixed(2)} m</b>`;
+  }
+}, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+viewer.scene.globe.depthTestAgainstTerrain = false;
+loadData();
+</script>
+</body>
+</html>

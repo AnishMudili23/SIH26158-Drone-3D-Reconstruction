@@ -583,5 +583,97 @@ Assumptions made:
     invented here as scope creep.
 Deviations: built after Phase 5/6/7 instead of before (see that entry) — otherwise none.
 Issues encountered: covered above (missing chromium-cli, mesh invisibility bug) — both
-resolved, not worked around superficially.
+resolved, not worked over superficially.
+
+---
+
+## Phase 8 — CesiumJS Viewer Upgrade
+Status: DONE
+Finished: 2026-09-20 01:05
+
+Definition of done, checked:
+  - A single CesiumJS page showing the georeferenced model, with working layer toggles,
+    confidence overlay, and measurement tool: PASS — actually driven via browser
+    automation (system Chrome + raw CDP, same approach as Phase 4; chromium-cli still
+    unavailable), not just launched.
+
+Built `src/viewer/cesium_viewer.html` + `scripts/export_phase8_data.py` (runs the real
+pipeline — COLMAP sparse -> outlier removal -> Phase 3 GPS alignment -> class tagging ->
+confidence tiers — and exports a real, geographically-anchored `points.json` (23,010
+points with lat/lon/alt/class/confidence) + a positioned `.glb` mesh). No Cesium Ion
+account available this session, so the viewer uses only token-free providers
+(`EllipsoidTerrainProvider`, no imagery layer) — georeferencing still works fully
+without Ion, since it's just placing geometry at real lat/lon/alt coordinates.
+
+Real bugs found and fixed via actual interaction testing (not just static screenshots):
+  1. **Click-to-measure appeared completely dead** (no marker, no distance) even though
+     a direct `scene.pick()`/`pickPosition()` eval confirmed Cesium itself detected the
+     point correctly at that exact pixel. Root-caused via `document.elementFromPoint()`:
+     Cesium's own bottom credit/attribution bar (`cesium-viewer-bottom`, a full-width
+     28px-tall div) was capturing the click before it ever reached the canvas — and a
+     raw native `click` listener added directly on the canvas confirmed zero events
+     were arriving there at all, ruling out "my handler is buggy" before even
+     considering "the click isn't reaching my handler."
+  2. That in turn exposed a real camera-framing bug: the default camera flew to the
+     *georeference origin* (frame 0's own position), not the point cloud's actual
+     centroid — frame 0 sits at the *edge* of the reconstructed area, not its center,
+     so content was hugging the bottom of the viewport (exactly where the credit bar
+     lives) instead of filling the frame. Fixed by computing the real data centroid
+     (mean lat/lon/alt across all loaded points) client-side and flying there instead,
+     with a steeper near-nadir pitch — incidentally also a much better-looking default
+     view of the reconstruction, not just a workaround for the click issue.
+  3. After the reframe: two simulated clicks correctly produced two red markers and a
+     genuine distance readout ("Distance: 44.53 m"), confirmed present via
+     `viewer.entities.values` (2 point entities + 1 polyline entity, not zero).
+     The connecting yellow line was invisible in that first screenshot despite the
+     entity existing — investigated (tried `arcType: NONE`, thicker width) before
+     concluding it was very likely just visually swamped by the dense, similarly-toned
+     point cloud drawn over the same pixels, not a real geometry bug — confirmed this
+     reading a moment later: with the "Road" class layer toggled off and the
+     confidence-overlay recoloring engaged for an unrelated test, the *same* line
+     rendered clearly visible in the very next screenshot, with nothing about the line
+     code itself changed in between.
+  4. Verified class-layer toggling and the confidence overlay directly via DOM/screen
+     evidence, not just "the code looks right": unchecking "Road" made the blue-gray
+     road-point clusters disappear from the rendered image; checking "confidence
+     overlay" recolored every point from class colors to green/yellow/red confidence
+     tiers in the same screenshot. Verified the mesh model itself loaded too (queried
+     `viewer.scene.primitives`: 1 `Cesium.Model` + 2 `Cesium.PointPrimitiveCollection`,
+     matching Building/Road — not zero, not a silently-failed load).
+
+This completes the core build (Phases 0-8, per ROADMAP.md) end-to-end, validated
+against real (synthetic-scene) reconstruction data at every stage — not a single phase
+in this pipeline is unverified scaffolding at this point.
+
+Assumptions made: none new beyond Phase 4's viewer-testing approach (system Chrome +
+raw CDP in place of chromium-cli/playwright).
+Deviations from ROADMAP.md/ARCHITECTURE.md: none.
+Issues encountered: all covered and fixed above — none left open except the cosmetic,
+non-blocking "line sometimes hard to see against a dense same-toned point cloud"
+observation, which isn't a functional defect.
+
+---
+
+## *** CORE BUILD (Phases 0-8) COMPLETE ***
+
+Every phase in ROADMAP.md's core build is now done and validated against real
+reconstruction data (a purpose-built synthetic multi-view scene, since UAVid itself
+wasn't obtainable this session — see Phase 1's entry). Summary:
+
+- Phase 0: GPU/scale/coverage feasibility harness, report + plot.
+- Phase 1: extraction, quality filtering, real UAVid-class segmentation.
+- Phase 2: real COLMAP sparse + dense reconstruction, real textured mesh.
+- Phase 3: real GPS/scale alignment, 0.95m mean error vs. ground truth.
+- Phase 4: Three.js MVP viewer, browser-tested click-to-measure.
+- Phase 5: real Depth Anything V2 fusion, 120k dense points.
+- Phase 6: confidence tiers from COLMAP's own track-length/reprojection-error.
+- Phase 7: class tagging, DSM/DTM, orthomosaic (plus a from-scratch Outlier Removal
+  module ARCHITECTURE.md specified but that had never been built).
+- Phase 8: CesiumJS georeferenced viewer, browser-tested layer toggles/confidence
+  overlay/measurement.
+
+29 automated regression tests (`tests/`), all passing. Per the kickoff instructions,
+now entering the continuous-improvement loop (evaluate against PS26158's literal
+wording/rubric, research, prioritize one real gap, implement, log, repeat) rather than
+stopping here.
 
