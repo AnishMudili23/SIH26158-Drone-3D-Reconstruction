@@ -725,4 +725,36 @@ stopping here.
    - Added `tests/test_las_export.py` covering `.las`, `.laz`, CRS VLRs, and shape validation.
    - Total automated test suite expanded to **33 passing tests**.
 
+---
+
+## Continuous Improvement — Cycle 3: Unified Single-Command End-to-End Pipeline Runner (`src.pipeline`)
+
+**Date**: 2026-09-20  
+**Target**: Complete CLAUDE.md's overarching definition of done ("A single command that takes a drone video + GPS metadata, and produces filtered frames, georeferenced mesh, classified point clouds (.las/.laz), DSM/DTM/orthomosaic GeoTIFFs, confidence report, and CesiumJS viewer data").
+
+### Actions & Findings:
+1. **Pipeline Architecture (`src/pipeline.py`)**:
+   - Implemented 7-stage sequential orchestration:
+     - Stage 1: Keyframe extraction / directory frame ingestion.
+     - Stage 2: SegFormer GPU semantic segmentation + COLMAP dynamic class filtering.
+     - Stage 3: COLMAP Structure-from-Motion (with optional `--reuse-sparse` cache).
+     - Stage 4: Statistical outlier removal.
+     - Stage 5: Umeyama georeferencing & ENU scale alignment.
+     - Stage 6: Semantic class tagging & dual-signal confidence scoring.
+     - Stage 7: Standard deliverable exports:
+       - ASPRS `.las` (uncompressed) & `.laz` (lossless compressed)
+       - Digital Surface Model (DSM) & Digital Terrain Model (DTM) GeoTIFFs
+       - Orthomosaic 2D map
+       - Metric quality & confidence report (`confidence_report.json`)
+       - CesiumJS 3D Web Viewer payload (`viewer_data/points.json`)
+2. **End-to-End Verification**:
+   - Validated on synthetic drone sequence (`outputs/demo_pipeline_run`):
+     - 60/60 frames registered (100.0%)
+     - 23,010 clean points georeferenced with <0.17 px reprojection error
+     - Successfully generated all 7 deliverable formats simultaneously in one command
+3. **Test Suite Status**:
+   - Added `tests/test_pipeline.py`.
+   - Total automated test suite expanded to **35 passing tests**.
+
+
 
