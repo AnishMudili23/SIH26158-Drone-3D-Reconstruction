@@ -34,14 +34,18 @@ def grid_elevation(
     values: np.ndarray | None,
     cell_size_m: float,
     agg: str,
+    bounds: tuple[float, float, float, float] | None = None,
 ) -> tuple[np.ndarray, float, float]:
     """Grids (x, y) -> aggregated Z (or `values` if given) at `cell_size_m` resolution.
     agg: 'max' (DSM) or 'min' (DTM). Returns (grid (rows, cols), x_min, y_max) — y_max
     because raster row 0 is the northernmost row (standard GeoTIFF row-major-from-top
     convention)."""
     x, y, z = points_enu[:, 0], points_enu[:, 1], values if values is not None else points_enu[:, 2]
-    x_min, x_max = x.min(), x.max()
-    y_min, y_max = y.min(), y.max()
+    if bounds is not None:
+        x_min, x_max, y_min, y_max = bounds
+    else:
+        x_min, x_max = x.min(), x.max()
+        y_min, y_max = y.min(), y.max()
 
     n_cols = max(1, int(np.ceil((x_max - x_min) / cell_size_m)))
     n_rows = max(1, int(np.ceil((y_max - y_min) / cell_size_m)))
@@ -77,6 +81,52 @@ def write_geotiff(
         dst.write(grid, 1)
 
 
+def compute_volumetric_metrics(
+    dsm_grid: np.ndarray,
+    dtm_grid: np.ndarray,
+    cell_size_m: float,
+    min_height_m: float = 0.5,
+) -> dict[str, float]:
+    """Computes volumetric and relief metrics from DSM and DTM elevation models.
+
+    Calculates:
+      - total_above_ground_volume_m3: integral of (DSM - DTM) for cells where DSM > DTM + min_height_m
+      - elevated_surface_area_m2: ground footprint of elevated features
+      - mean_elevated_height_m: average height above ground of elevated features
+      - max_height_m: peak height above ground
+    """
+    valid_mask = np.isfinite(dsm_grid) & np.isfinite(dtm_grid)
+    if not np.any(valid_mask):
+        return {
+            "total_above_ground_volume_m3": 0.0,
+            "elevated_surface_area_m2": 0.0,
+            "mean_elevated_height_m": 0.0,
+            "max_height_m": 0.0,
+        }
+
+    diff = dsm_grid[valid_mask] - dtm_grid[valid_mask]
+    elevated = diff > min_height_m
+    cell_area = cell_size_m ** 2
+
+    if np.any(elevated):
+        vol = float(np.sum(diff[elevated]) * cell_area)
+        area = float(np.sum(elevated) * cell_area)
+        mean_h = float(np.mean(diff[elevated]))
+        max_h = float(np.max(diff[elevated]))
+    else:
+        vol = 0.0
+        area = 0.0
+        mean_h = 0.0
+        max_h = 0.0
+
+    return {
+        "total_above_ground_volume_m3": vol,
+        "elevated_surface_area_m2": area,
+        "mean_elevated_height_m": mean_h,
+        "max_height_m": max_h,
+    }
+
+
 def export_dsm_dtm(
     points_enu: np.ndarray,
     class_names: list[str],
@@ -89,19 +139,24 @@ def export_dsm_dtm(
 ) -> dict:
     epsg = utm_epsg_for_lonlat(origin_lon, origin_lat)
 
-    dsm_grid, x_min, y_max = grid_elevation(points_enu, None, cell_size_m, agg="max")
-    write_geotiff(dsm_grid, x_min, y_max, cell_size_m, epsg, dsm_out_path)
+    x_min, y_min = points_enu[:, :2].min(axis=0)
+    x_max, y_max = points_enu[:, :2].max(axis=0)
+    shared_bounds = (float(x_min), float(x_max), float(y_min), float(y_max))
+
+    dsm_grid, _, _ = grid_elevation(points_enu, None, cell_size_m, agg="max", bounds=shared_bounds)
+    write_geotiff(dsm_grid, float(x_min), float(y_max), cell_size_m, epsg, dsm_out_path)
 
     ground_mask = np.array([c in ground_like_classes for c in class_names])
     n_ground_points = int(ground_mask.sum())
     if n_ground_points > 0:
-        dtm_grid, dtm_x_min, dtm_y_max = grid_elevation(
-            points_enu[ground_mask], None, cell_size_m, agg="min"
+        dtm_grid, _, _ = grid_elevation(
+            points_enu[ground_mask], None, cell_size_m, agg="min", bounds=shared_bounds
         )
     else:
-        dtm_grid, dtm_x_min, dtm_y_max = dsm_grid.copy(), x_min, y_max
-        dtm_grid[:] = np.nan
-    write_geotiff(dtm_grid, dtm_x_min, dtm_y_max, cell_size_m, epsg, dtm_out_path)
+        dtm_grid = np.full_like(dsm_grid, np.nan)
+    write_geotiff(dtm_grid, float(x_min), float(y_max), cell_size_m, epsg, dtm_out_path)
+
+    volumetric_stats = compute_volumetric_metrics(dsm_grid, dtm_grid, cell_size_m)
 
     return {
         "epsg": epsg,
@@ -110,4 +165,5 @@ def export_dsm_dtm(
         "dtm_shape": dtm_grid.shape,
         "n_ground_points_for_dtm": n_ground_points,
         "pct_dtm_cells_unknown": float(np.isnan(dtm_grid).mean() * 100),
+        "volumetric": volumetric_stats,
     }

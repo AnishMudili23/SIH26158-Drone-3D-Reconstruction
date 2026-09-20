@@ -23,8 +23,16 @@
 <body>
 <div id="cesiumContainer"></div>
 <div id="panel">
-  <div><b>SIH26158 — Phase 8 Georeferenced Viewer</b></div>
-  <div id="status">Loading…</div>
+  <div><b>SIH26158 — Georeferenced 3D Viewer</b></div>
+  <div style="margin-top:6px;">
+    <label for="dataset-select" style="font-weight:bold; color:#7ec8ff;">Active Dataset:</label>
+    <select id="dataset-select" style="width:100%; padding:4px; border-radius:4px; background:#2a2a2a; color:#eee; border:1px solid #555; margin-top:2px;">
+      <option value="/outputs/demo_pipeline_run/viewer_data">Demo Pipeline Run (Full Deliverables)</option>
+      <option value="/outputs/phase8_viewer_data">Phase 8 Baseline Dataset</option>
+      <option value="/outputs/video_pipeline_test/viewer_data">Video Pipeline Test</option>
+    </select>
+  </div>
+  <div id="status" style="margin-top:6px;">Loading…</div>
   <div style="margin-top:8px;"><b>Class layers</b></div>
   <div id="class-toggles"></div>
   <div style="margin-top:8px;">
@@ -76,21 +84,44 @@ const CONFIDENCE_COLORS = {
 };
 
 let showConfidence = false;
-const pointsByClass = {}; // class name -> Cesium.PointPrimitiveCollection
+let pointsByClass = {}; // class name -> Cesium.PointPrimitiveCollection
 let allPointRecords = [];
+let currentModel = null;
 
-async function loadData() {
-  const resp = await fetch("/outputs/phase8_viewer_data/points.json");
-  const data = await resp.json();
+async function loadData(targetFolder) {
+  // Clean up existing primitives when switching datasets
+  if (currentModel) {
+    viewer.scene.primitives.remove(currentModel);
+    currentModel = null;
+  }
+  for (const cls in pointsByClass) {
+    viewer.scene.primitives.remove(pointsByClass[cls]);
+  }
+  pointsByClass = {};
+  allPointRecords = [];
+  document.getElementById("class-toggles").innerHTML = "";
+  resetMeasurement();
+
+  const urlParams = new URLSearchParams(window.location.search);
+  const folder = targetFolder || urlParams.get("data") || document.getElementById("dataset-select").value;
+  document.getElementById("status").textContent = `Loading ${folder}…`;
+
+  let data;
+  try {
+    const resp = await fetch(`${folder}/points.json`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    data = await resp.json();
+  } catch (err) {
+    console.warn(`Could not load ${folder}/points.json, falling back to phase8_viewer_data:`, err);
+    const fallbackResp = await fetch("/outputs/phase8_viewer_data/points.json");
+    data = await fallbackResp.json();
+  }
+
   document.getElementById("status").textContent = `Loaded ${data.n_points} points, origin (${data.origin.lat.toFixed(5)}, ${data.origin.lon.toFixed(5)})`;
 
   const originCartesian = Cesium.Cartesian3.fromDegrees(data.origin.lon, data.origin.lat, data.origin.alt);
 
-  // Fly to the data's actual centroid, not the georeference origin (which is just
-  // frame 0's own position — confirmed by direct experiment to sit at the edge of the
-  // point cloud's real extent, not its center, leaving content hugging one corner of
-  // the view and, at this default camera distance, partly hidden behind Cesium's own
-  // bottom credit bar).
+  // Fly to the data's actual centroid
   let sumLat = 0, sumLon = 0, sumAlt = 0;
   for (const p of data.points) { sumLat += p.lat; sumLon += p.lon; sumAlt += p.alt; }
   const n = data.points.length;
@@ -134,15 +165,30 @@ async function loadData() {
 
   try {
     const model = await Cesium.Model.fromGltfAsync({
-      url: "/outputs/phase8_viewer_data/mesh_scaled.glb",
+      url: `${folder}/mesh_scaled.glb`,
       modelMatrix: Cesium.Transforms.eastNorthUpToFixedFrame(originCartesian),
     });
+    currentModel = model;
     viewer.scene.primitives.add(model);
   } catch (e) {
-    console.error("Mesh load failed:", e);
-    document.getElementById("status").textContent += " (mesh failed to load — see console)";
+    // try fallback mesh if not present in folder
+    try {
+      const model = await Cesium.Model.fromGltfAsync({
+        url: "/outputs/phase8_viewer_data/mesh_scaled.glb",
+        modelMatrix: Cesium.Transforms.eastNorthUpToFixedFrame(originCartesian),
+      });
+      currentModel = model;
+      viewer.scene.primitives.add(model);
+    } catch (e2) {
+      console.warn("Mesh load failed:", e2);
+      document.getElementById("status").textContent += " (mesh unavailable)";
+    }
   }
 }
+
+document.getElementById("dataset-select").addEventListener("change", (e) => {
+  loadData(e.target.value);
+});
 
 document.getElementById("confidence-toggle").addEventListener("change", (e) => {
   showConfidence = e.target.checked;

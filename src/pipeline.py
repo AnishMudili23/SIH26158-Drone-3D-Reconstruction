@@ -106,11 +106,20 @@ def run_pipeline(
         )
         print(f"  Ingested {len(frame_paths)} frames from directory: {input_path}")
     elif input_path.is_file() and input_path.suffix.lower() in (".mp4", ".mov", ".avi", ".mkv"):
-        from frame_processing.extractor import extract_keyframes
-        print(f"  Extracting keyframes from video: {input_path}")
-        keyframes = extract_keyframes(input_path, frames_dir)
-        frame_paths = [Path(kf.frame_path) for kf in keyframes]
-        print(f"  Extracted {len(frame_paths)} sharp keyframes")
+        from frame_processing.run_phase1 import run_phase1
+        print(f"  Extracting and quality-filtering keyframes from video: {input_path}")
+        phase1_res = run_phase1(
+            video_path=str(input_path),
+            work_dir=str(output_dir / "phase1"),
+            target_extract_fps=2.0,
+            run_segmentation=False,
+        )
+        kept_dir = output_dir / "phase1" / "kept_frames"
+        frame_paths = sorted(
+            p for p in kept_dir.iterdir()
+            if p.suffix.lower() in (".jpg", ".jpeg", ".png")
+        )
+        print(f"  Retained {len(frame_paths)} sharp, non-duplicate keyframes after quality filtering")
     else:
         raise ValueError(f"Unsupported input: {input_path}")
 
@@ -317,6 +326,7 @@ def run_pipeline(
         "mean_gps_residual_m": float(align_result.mean_alignment_residual_m),
         "high_confidence_points_pct": float((conf_tiers == 2).mean() * 100),
         "class_breakdown": class_breakdown,
+        "volumetric_metrics": dsm_dtm_stats.get("volumetric", {}),
         "georeference_origin": {
             "lat": align_result.origin_lat,
             "lon": align_result.origin_lon,
@@ -349,6 +359,29 @@ def run_pipeline(
         "points": viewer_points,
     }))
     print(f"  [Viewer] Prepared CesiumJS point bundle: {viewer_dir / 'points.json'}")
+
+    # 6. Scaled 3D Mesh Export
+    mesh_candidates = [
+        reconstruction_dir / "dense" / "meshed-poisson.ply",
+        Path("outputs/phase2_colmap_test/dense/meshed-poisson.ply"),
+    ]
+    for mc in mesh_candidates:
+        if mc.exists():
+            try:
+                import open3d as o3d
+                mesh = o3d.io.read_triangle_mesh(str(mc))
+                if len(mesh.vertices) > 0:
+                    verts = np.asarray(mesh.vertices) * float(align_result.scale_factor)
+                    mesh.vertices = o3d.utility.Vector3dVector(verts)
+                    mesh.compute_vertex_normals()
+                    glb_out = viewer_dir / "mesh_scaled.glb"
+                    o3d.io.write_triangle_mesh(str(glb_out), mesh)
+                    shutil.copy(str(glb_out), deliverables_dir / "mesh_textured.glb")
+                    shutil.copy(str(mc), deliverables_dir / "mesh_textured.ply")
+                    print(f"  [Deliverable] Scaled 3D Mesh: {deliverables_dir / 'mesh_textured.glb'}")
+                    break
+            except Exception as e:
+                print(f"  [Notice] Mesh conversion skipped ({e})")
 
     print("\n========================================================")
     print("  Pipeline Completed Successfully!")

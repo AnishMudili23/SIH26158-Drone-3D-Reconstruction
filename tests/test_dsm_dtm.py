@@ -35,3 +35,21 @@ def test_empty_cells_are_nan_not_zero():
     grid2, _, _ = grid_elevation(points_enu2, None, cell_size_m=1.0, agg="max")
     assert np.isnan(grid2).any()
     assert not np.any(grid2 == 0)
+
+
+def test_compute_volumetric_metrics():
+    from exports.dsm_dtm import compute_volumetric_metrics
+
+    # 2x2 grid, cell size 2.0m -> area per cell = 4.0 m2
+    # Ground at 10.0m everywhere
+    dtm = np.array([[10.0, 10.0], [10.0, 10.0]])
+    # Building at (0, 0) height 15.0m (diff = 5m), others at ground
+    dsm = np.array([[15.0, 10.0], [10.0, 10.0]])
+
+    stats = compute_volumetric_metrics(dsm, dtm, cell_size_m=2.0, min_height_m=1.0)
+    # Expected volume = 5.0m * 4.0m2 = 20.0 m3
+    assert stats["total_above_ground_volume_m3"] == 20.0
+    assert stats["elevated_surface_area_m2"] == 4.0
+    assert stats["max_height_m"] == 5.0
+    assert stats["mean_elevated_height_m"] == 5.0
+
