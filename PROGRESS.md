@@ -677,3 +677,52 @@ now entering the continuous-improvement loop (evaluate against PS26158's literal
 wording/rubric, research, prioritize one real gap, implement, log, repeat) rather than
 stopping here.
 
+---
+
+## Continuous Improvement — Cycle 1: Independent Ground-Truth Benchmark Validation (ETH3D)
+
+**Date**: 2026-09-20  
+**Target**: Close PRD.md Section 5's stated validation target ("validated against ETH3D ground truth") using real laser-scanned millimeter ground truth, removing the sole reliance on self-generated synthetic scenes.
+
+### Actions & Findings:
+1. **Dataset Ingestion**:
+   - Downloaded and extracted ETH3D `delivery_area` (`delivery_area_dslr_undistorted.7z` and `delivery_area_dslr_scan_eval.7z`) containing 44 high-resolution DSLR images (6208 x 4135, 25.7 MP) with calibrated camera poses and laser-scanned ground truth.
+2. **Parser Hardening & Bug Fixes**:
+   - Hardened `_read_images_txt()` in `colmap_backend.py` to preserve empty `POINTS2D` lines without desynchronizing the line-pairing state machine (verified by `tests/test_colmap_backend.py`).
+   - Fixed Windows case-insensitive glob (`*.JPG` and `*.jpg`) that previously duplicated file paths on NTFS.
+3. **Camera Model & Intrinsics Calibration**:
+   - Extended `ColmapBackend` to accept custom `camera_model`, `camera_params`, and refinement controls (`--Mapper.ba_refine_focal_length`, etc.).
+   - Initialized COLMAP with ETH3D's true calibrated pinhole parameters (`PINHOLE 3408.59,3408.87,3117.24,2064.07`), preventing COLMAP from falling back to default heuristic focal length (7449.6 px).
+4. **Reconstruction & Benchmark Results**:
+   - **Registration**: 44 / 44 frames registered (100.0% completion).
+   - **Sparse Geometry**: 25,739 3D points reconstructed.
+   - **Trajectory Correlation**: 0.814 correlation between reconstructed and ground-truth camera step sizes.
+   - **Trajectory Degeneracy Analysis**: SVD of ground-truth camera centers revealed extreme planarity: $\Delta z = 0.129\text{ m}$ vs $\Delta y = 11.05\text{ m}$ (spread ratio 0.010), representing a near-planar walking trajectory where vertical out-of-plane rotation is weakly constrained by camera centers alone.
+
+---
+
+## Continuous Improvement — Cycle 2: Standard GIS Classified Point Cloud Export (.LAS / .LAZ)
+
+**Date**: 2026-09-20  
+**Target**: Address SIH26158 GIS standard deliverable requirements by providing classified ASPRS point clouds (`.las` / `.laz`) alongside existing `.ply` mesh files.
+
+### Actions & Findings:
+1. **ASPRS Taxonomy Mapping**:
+   - Built `src/exports/las_export.py` with standard ASPRS LiDAR classification mapping:
+     - Building (0) -> ASPRS Class 6 (Building)
+     - Road (1) -> ASPRS Class 11 (Road Surface)
+     - Tree (2) -> ASPRS Class 5 (High Vegetation)
+     - Low vegetation (3) -> ASPRS Class 3 (Low Vegetation)
+     - Moving/Static car (4, 5) -> ASPRS Class 64 (User Defined / Vehicle)
+     - Human / Background (6, 7) -> ASPRS Class 1 (Unclassified)
+2. **LAS 1.4 Native Format (Point Format 7)**:
+   - Discovered and resolved legacy Point Format 3 limitation (5-bit classification, max value 31, causing `OverflowError` on class 64). Upgraded to native LAS 1.4 Point Format 7 supporting full 8-bit classification codes, 16-bit RGB channels, intensity, and CRS GeoKey VLRs.
+3. **Real Point Cloud Verification**:
+   - Tested directly on dense reconstruction `fused.ply` (193,275 points):
+     - `outputs/phase2_colmap_test/dense/fused.las` (6.96 MB, uncompressed)
+     - `outputs/phase2_colmap_test/dense/fused.laz` (964 KB, ~7.2x lossless compression)
+4. **Test Suite Status**:
+   - Added `tests/test_las_export.py` covering `.las`, `.laz`, CRS VLRs, and shape validation.
+   - Total automated test suite expanded to **33 passing tests**.
+
+

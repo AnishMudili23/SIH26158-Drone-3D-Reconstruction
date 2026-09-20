@@ -18,6 +18,7 @@ torchvision  # matches torch's cu121 build, installed via the PyTorch index abov
 
 open3d==0.20.0
 rasterio==1.4.4
+laspy[lazrs]>=2.5.0
 pytest==9.1.1
 
 # NOTE on transformers version pin (important, don't casually bump):

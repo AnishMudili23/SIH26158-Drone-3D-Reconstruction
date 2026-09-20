@@ -19,9 +19,20 @@ import numpy as np
 from pathlib import Path
 
 from reconstruction.colmap_backend import (
-    ColmapBackend, _quat_to_rotmat, _read_images_txt,
+    ColmapBackend, _quat_to_rotmat, _read_images_txt, _read_cameras_txt,
 )
 from common.alignment import umeyama_alignment
+
+
+def read_eth3d_camera_calibration(cameras_txt_path: str) -> tuple[str, str]:
+    """Extract (camera_model, camera_params_csv) from cameras.txt."""
+    cameras = _read_cameras_txt(Path(cameras_txt_path))
+    if not cameras:
+        raise ValueError(f"No camera found in {cameras_txt_path}")
+    cam = list(cameras.values())[0]
+    model = cam["model"]
+    params_csv = ",".join(str(p) for p in cam["params"])
+    return model, params_csv
 
 
 def read_eth3d_gt_poses(images_txt_path: str) -> dict[str, np.ndarray]:
@@ -40,6 +51,7 @@ def main(scene_dir: str, work_dir: str, max_images: int | None = None):
     scene_dir = Path(scene_dir)
     image_dir = scene_dir / "images" / "dslr_images_undistorted"
     gt_images_txt = scene_dir / "dslr_calibration_undistorted" / "images.txt"
+    gt_cameras_txt = scene_dir / "dslr_calibration_undistorted" / "cameras.txt"
 
     if not image_dir.exists():
         raise FileNotFoundError(f"{image_dir} not found — check extraction")
@@ -49,14 +61,20 @@ def main(scene_dir: str, work_dir: str, max_images: int | None = None):
     gt_centers = read_eth3d_gt_poses(str(gt_images_txt))
     print(f"Ground truth: {len(gt_centers)} camera poses")
 
-    frame_paths = sorted(str(p) for p in image_dir.glob("*.JPG")) + sorted(str(p) for p in image_dir.glob("*.jpg"))
+    frame_paths = sorted({str(p) for p in image_dir.iterdir() if p.suffix.lower() in [".jpg", ".jpeg", ".png"]})
     if max_images:
         # Evenly sample rather than truncate, to keep spatial coverage of the scene.
         idx = np.linspace(0, len(frame_paths) - 1, max_images).astype(int)
         frame_paths = [frame_paths[i] for i in sorted(set(idx))]
     print(f"Running COLMAP on {len(frame_paths)} real ETH3D images...")
 
-    backend = ColmapBackend()
+    cam_model = "SIMPLE_RADIAL"
+    cam_params = None
+    if gt_cameras_txt.exists():
+        cam_model, cam_params = read_eth3d_camera_calibration(str(gt_cameras_txt))
+        print(f"Using known calibration: model={cam_model}, params={cam_params}")
+
+    backend = ColmapBackend(camera_model=cam_model, camera_params=cam_params)
     geometry = backend.estimate_geometry(frame_paths, work_dir)
     print(f"COLMAP registered {len(geometry.poses)} / {len(frame_paths)} frames, "
           f"{geometry.points_xyz.shape[0]} sparse points")
@@ -98,5 +116,5 @@ def main(scene_dir: str, work_dir: str, max_images: int | None = None):
 if __name__ == "__main__":
     scene = sys.argv[1] if len(sys.argv) > 1 else "data/datasets/eth3d/delivery_area"
     work = sys.argv[2] if len(sys.argv) > 2 else "outputs/eth3d_validation"
-    max_imgs = int(sys.argv[3]) if len(sys.argv) > 3 else 25
+    max_imgs = int(sys.argv[3]) if len(sys.argv) > 3 else None
     main(scene, work, max_imgs)

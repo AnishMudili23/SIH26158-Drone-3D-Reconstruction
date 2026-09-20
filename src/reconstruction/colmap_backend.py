@@ -203,9 +203,19 @@ def read_sparse_text_model(sparse_txt_dir: str | Path) -> dict:
 class ColmapBackend:
     name = "colmap"
 
-    def __init__(self, colmap_bin: str | None = None, use_gpu: bool = True):
+    def __init__(
+        self,
+        colmap_bin: str | None = None,
+        use_gpu: bool = True,
+        camera_model: str = "SIMPLE_RADIAL",
+        camera_params: str | None = None,
+        refine_intrinsics: bool = True,
+    ):
         self.colmap_bin = colmap_bin or find_colmap_binary()
         self.use_gpu = use_gpu
+        self.camera_model = camera_model
+        self.camera_params = camera_params
+        self.refine_intrinsics = refine_intrinsics
 
     def run_sparse_reconstruction(
         self, image_dir: str | Path, work_dir: str | Path, mask_dir: str | Path | None = None
@@ -233,10 +243,12 @@ class ColmapBackend:
             self.colmap_bin, "feature_extractor",
             "--database_path", str(db_path),
             "--image_path", str(image_dir),
-            "--ImageReader.camera_model", "SIMPLE_RADIAL",
+            "--ImageReader.camera_model", self.camera_model,
             "--ImageReader.single_camera", "1",
             "--FeatureExtraction.use_gpu", gpu_flag,
         ]
+        if self.camera_params is not None:
+            feature_extractor_cmd += ["--ImageReader.camera_params", str(self.camera_params)]
         if mask_dir is not None:
             feature_extractor_cmd += ["--ImageReader.mask_path", str(mask_dir)]
         _run(feature_extractor_cmd)
@@ -248,12 +260,19 @@ class ColmapBackend:
             "--SequentialMatching.overlap", "10",
         ])
 
-        _run([
+        mapper_cmd = [
             self.colmap_bin, "mapper",
             "--database_path", str(db_path),
             "--image_path", str(image_dir),
             "--output_path", str(sparse_dir),
-        ])
+        ]
+        if not self.refine_intrinsics:
+            mapper_cmd += [
+                "--Mapper.ba_refine_focal_length", "0",
+                "--Mapper.ba_refine_principal_point", "0",
+                "--Mapper.ba_refine_extra_params", "0",
+            ]
+        _run(mapper_cmd)
 
         model_0 = sparse_dir / "0"
         if not model_0.exists():
