@@ -45,10 +45,28 @@
   #replay-slider { flex: 1; accent-color: #3b82f6; cursor: pointer; }
   #play-btn { min-width: 60px; font-weight: bold; }
   .warn { color: #fbbf24; font-size: 11px; margin-top: 10px; }
+
+  /* Top Right Onboard Video PiP */
+  #pip-box {
+    position: absolute; top: 20px; right: 20px; width: 300px;
+    background: rgba(18, 22, 28, 0.90); backdrop-filter: blur(8px);
+    border-radius: 8px; padding: 8px 10px; z-index: 25;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5); border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+  #pip-video { width: 100%; border-radius: 4px; display: block; background: #000; max-height: 180px; object-fit: cover; }
 </style>
 </head>
 <body>
 <div id="cesiumContainer"></div>
+
+<!-- Top-Right Onboard Drone Video Player -->
+<div id="pip-box">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+    <span style="font-weight:bold; font-size:11px; color:#7ec8ff;">LIVE ONBOARD CAMERA</span>
+    <button id="pip-toggle-btn" style="padding:1px 6px; font-size:10px;">Hide</button>
+  </div>
+  <video id="pip-video" src="/outputs/zurich_mav_mission/drone_flight_zurich.mp4" controls muted playsinline loop></video>
+</div>
 
 <!-- Left Inspection & Layer Panel -->
 <div id="panel">
@@ -183,6 +201,14 @@ async function loadData(targetFolder) {
   const folder = targetFolder || document.getElementById("dataset-select").value;
   document.getElementById("status").textContent = `Loading ${folder}…`;
 
+  if (pipVideo) {
+    if (folder.includes("zurich")) {
+      pipVideo.src = "/outputs/zurich_mav_mission/drone_flight_zurich.mp4";
+    } else {
+      pipVideo.src = "/data/datasets/synthetic_test_flight.mp4";
+    }
+  }
+
   let data;
   try {
     const res = await fetch(`${folder}/points.json`);
@@ -312,34 +338,61 @@ async function loadData(targetFolder) {
   }
 }
 
-// Mission Replay scrubber logic
+// Mission Replay scrubber & Video PiP logic
 const replaySlider = document.getElementById("replay-slider");
 const replayTime = document.getElementById("replay-time");
 const playBtn = document.getElementById("play-btn");
+const pipVideo = document.getElementById("pip-video");
+const pipToggleBtn = document.getElementById("pip-toggle-btn");
+
+if (pipToggleBtn && pipVideo) {
+  pipToggleBtn.addEventListener("click", () => {
+    if (pipVideo.style.display === "none") {
+      pipVideo.style.display = "block";
+      pipToggleBtn.textContent = "Hide";
+    } else {
+      pipVideo.style.display = "none";
+      pipToggleBtn.textContent = "Show";
+    }
+  });
+}
 
 function updateReplayPosition(val) {
   if (flightTrajectory.length === 0 || !droneEntity) return;
-  const idx = Math.min(Math.floor((val / 100) * flightTrajectory.length), flightTrajectory.length - 1);
+  const maxVal = parseFloat(replaySlider.max) || 100;
+  const frac = Math.min(Math.max(val / maxVal, 0.0), 1.0);
+  const idx = Math.min(Math.floor(frac * flightTrajectory.length), flightTrajectory.length - 1);
   droneEntity.position = flightTrajectory[idx];
-  replayTime.textContent = `${(val * 0.3).toFixed(1)}s`;
+  replayTime.textContent = `${(val * 0.05).toFixed(1)}s`;
+
+  if (pipVideo && pipVideo.duration && !isNaN(pipVideo.duration)) {
+    pipVideo.currentTime = frac * pipVideo.duration;
+  }
 }
 
 replaySlider.addEventListener("input", (e) => {
-  updateReplayPosition(parseInt(e.target.value));
+  updateReplayPosition(parseFloat(e.target.value));
 });
 
 playBtn.addEventListener("click", () => {
   isPlaying = !isPlaying;
   playBtn.textContent = isPlaying ? "⏸ Pause" : "▶ Play";
   if (isPlaying) {
+    if (pipVideo && pipVideo.paused) {
+      pipVideo.play().catch(() => {});
+    }
+    const maxVal = parseFloat(replaySlider.max) || 100;
     playInterval = setInterval(() => {
-      let val = parseInt(replaySlider.value) + 1;
-      if (val > 100) val = 0;
+      let val = parseFloat(replaySlider.value) + 1;
+      if (val > maxVal) val = 0;
       replaySlider.value = val;
       updateReplayPosition(val);
     }, 100);
   } else {
     clearInterval(playInterval);
+    if (pipVideo && !pipVideo.paused) {
+      pipVideo.pause();
+    }
   }
 });
 
