@@ -16,6 +16,7 @@ interface HeaderProps {
   selectedMissionId: string;
   onSelectMission: (id: string) => void;
   sensorQuality?: SensorQualityReport;
+  telemetryProvenance?: string;
   systemHealth?: { status: string; gpu_available: boolean; device: string };
   onRefresh: () => void;
 }
@@ -25,9 +26,22 @@ export const Header: React.FC<HeaderProps> = ({
   selectedMissionId,
   onSelectMission,
   sensorQuality,
+  telemetryProvenance,
   systemHealth,
   onRefresh,
 }) => {
+  const provenanceBadge = (() => {
+    switch (telemetryProvenance) {
+      case "REAL":
+        return { label: "PROVENANCE: REAL", cls: "bg-zinc-800/80 text-zinc-300 border-zinc-700/60" };
+      case "SIMULATED":
+        return { label: "PROVENANCE: SIMULATED", cls: "bg-amber-950/80 text-amber-400 border-amber-700/60" };
+      case "ESTIMATED":
+        return { label: "PROVENANCE: ESTIMATED (VISUAL ONLY)", cls: "bg-amber-950/80 text-amber-400 border-amber-700/60" };
+      default:
+        return { label: "PROVENANCE: NONE", cls: "bg-zinc-900 text-zinc-500 border-zinc-800" };
+    }
+  })();
   const getQualityBadge = () => {
     if (!sensorQuality) {
       return (
@@ -115,8 +129,8 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="flex items-center gap-3">
         {getQualityBadge()}
 
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono bg-zinc-800/80 text-zinc-300 border border-zinc-700/60">
-          PROVENANCE: REAL
+        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono border ${provenanceBadge.cls}`}>
+          {provenanceBadge.label}
         </span>
 
         <div className="h-4 w-px bg-zinc-800" />

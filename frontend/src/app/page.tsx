@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { Header } from "@/components/Header";
+import { StatusStrip } from "@/components/StatusStrip";
 import { MissionSidebar } from "@/components/MissionSidebar";
 import { CesiumViewport } from "@/components/CesiumViewport";
 import { StructureInspector } from "@/components/StructureInspector";
@@ -65,9 +66,12 @@ export default function Home() {
         selectedMissionId={selectedMissionId}
         onSelectMission={setSelectedMissionId}
         sensorQuality={selectedMission?.sensor_quality}
+        telemetryProvenance={selectedMission?.telemetry_provenance}
         systemHealth={systemHealth}
         onRefresh={loadData}
       />
+
+      <StatusStrip mission={selectedMission} />
 
       {/* 2. Main 3-Column Workspace */}
       <div className="flex-1 flex overflow-hidden relative">
