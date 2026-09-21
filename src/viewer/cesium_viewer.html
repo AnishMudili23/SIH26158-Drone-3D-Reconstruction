@@ -182,6 +182,7 @@ let playInterval = null;
 let currentBuildings = [];
 let currentEnuMatrix = null;
 let buildingEntities = {};
+let axisEntities = [];
 
 async function loadData(targetFolder) {
   if (currentModel) {
@@ -295,17 +296,6 @@ async function loadData(targetFolder) {
     buildingEntities[b.instance_id] = entity;
   }
 
-  // Position camera to fit scene
-  viewer.camera.flyTo({
-    destination: Cesium.Cartesian3.fromDegrees(origin.lon, origin.lat - 0.0003, origin.alt + 35.0),
-    orientation: {
-      heading: Cesium.Math.toRadians(0),
-      pitch: Cesium.Math.toRadians(-45),
-      roll: 0,
-    },
-    duration: 1.5,
-  });
-
   // Build class primitive collections and toggles
   const toggleContainer = document.getElementById("class-toggles");
   for (const cls of classes) {
@@ -332,12 +322,90 @@ async function loadData(targetFolder) {
   }
 
   // Populate point cloud
+  const pointPositions = [];
   for (const p of data.points) {
     const position = Cesium.Cartesian3.fromDegrees(p.lon, p.lat, p.alt);
     const color = showConfidence ? CONFIDENCE_COLORS[p.confidence] : (CLASS_COLORS[p.class] || Cesium.Color.WHITE);
     const primitive = pointsByClass[p.class].add({ position, color, pixelSize: 4 });
     allPointRecords.push({ primitive, cls: p.class, confidence: p.confidence, alt: p.alt, lat: p.lat, lon: p.lon });
+    pointPositions.push(position);
   }
+
+  // XYZ axis gizmo at the scene origin (0,0,0 in the ENU frame everything else —
+  // buildings, mesh, points — is expressed in). Sized relative to the actual point
+  // cloud extent so it's visible but doesn't dwarf small scenes or vanish in large
+  // ones, rather than a fixed length guessed independent of the data.
+  for (const e of axisEntities) viewer.entities.remove(e);
+  axisEntities = [];
+  const sceneBoundingSphere = pointPositions.length > 0
+    ? Cesium.BoundingSphere.fromPoints(pointPositions)
+    : new Cesium.BoundingSphere(originCartesian, 30);
+  const axisLength = Cesium.Math.clamp(sceneBoundingSphere.radius * 0.3, 5, 100);
+  const AXES = [
+    { dir: [axisLength, 0, 0], color: Cesium.Color.RED, label: "X (East)" },
+    { dir: [0, axisLength, 0], color: Cesium.Color.LIME, label: "Y (North)" },
+    { dir: [0, 0, axisLength], color: Cesium.Color.DODGERBLUE, label: "Z (Up)" },
+  ];
+  for (const axis of AXES) {
+    const tip = Cesium.Matrix4.multiplyByPoint(
+      currentEnuMatrix, new Cesium.Cartesian3(...axis.dir), new Cesium.Cartesian3()
+    );
+    axisEntities.push(viewer.entities.add({
+      polyline: {
+        positions: [originCartesian, tip],
+        width: 4,
+        material: axis.color,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        arcType: Cesium.ArcType.NONE,
+      },
+    }));
+    axisEntities.push(viewer.entities.add({
+      position: tip,
+      point: { pixelSize: 6, color: axis.color, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+      label: {
+        text: axis.label,
+        font: "11px sans-serif",
+        fillColor: axis.color,
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+        outlineWidth: 2,
+        outlineColor: Cesium.Color.BLACK,
+        pixelOffset: new Cesium.Cartesian2(0, -10),
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      },
+    }));
+  }
+  axisEntities.push(viewer.entities.add({
+    position: originCartesian,
+    point: { pixelSize: 8, color: Cesium.Color.WHITE, outlineColor: Cesium.Color.BLACK, outlineWidth: 2, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+    label: {
+      text: "origin (0,0,0)",
+      font: "10px sans-serif",
+      fillColor: Cesium.Color.WHITE,
+      style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+      outlineWidth: 2,
+      outlineColor: Cesium.Color.BLACK,
+      pixelOffset: new Cesium.Cartesian2(0, 14),
+      disableDepthTestDistance: Number.POSITIVE_INFINITY,
+    },
+  }));
+
+  // Orbit the scene's own centroid instead of the WGS84 globe's center. Cesium's
+  // default camera controls rotate around the ellipsoid center, which at this close
+  // a zoom level (a local scene, not a planet) makes left-drag feel like panning
+  // rather than rotating — the actual pivot is effectively far below the ground.
+  // lookAtTransform fixes the pivot to a point in this local ENU frame instead, so
+  // drag genuinely orbits the reconstructed scene through the full range of motion.
+  const orbitRange = Cesium.Math.clamp(sceneBoundingSphere.radius * 2.5, 30, 500);
+  viewer.camera.flyToBoundingSphere(sceneBoundingSphere, {
+    offset: new Cesium.HeadingPitchRange(Cesium.Math.toRadians(0), Cesium.Math.toRadians(-45), orbitRange),
+    duration: 1.5,
+    complete: () => {
+      viewer.camera.lookAtTransform(
+        currentEnuMatrix,
+        new Cesium.HeadingPitchRange(Cesium.Math.toRadians(0), Cesium.Math.toRadians(-45), orbitRange)
+      );
+    },
+  });
 
   // Real flight trajectory (registered camera positions) — no fabricated path.
   // If this dataset predates the trajectory export, or ran in LOCAL_METRIC mode,
