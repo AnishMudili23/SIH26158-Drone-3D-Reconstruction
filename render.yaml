@@ -1,0 +1,40 @@
+# Render Blueprint for the AeroMesh viewer-only demo deployment.
+#
+# This deploys the FastAPI mission API and the Next.js frontend as two Render web
+# services. It does NOT deploy the reconstruction pipeline (COLMAP, torch/CUDA,
+# open3d, rasterio) — that stays local, since it needs a GPU and can't run inside a
+# standard Render web service. The API here only reads and serves already-computed
+# mission outputs (see requirements-api.txt vs. requirements.txt).
+#
+# One demo mission's outputs (outputs/real_world_4thave_run/{deliverables,viewer_data},
+# ~24MB, no raw video) are committed to the repo specifically so a fresh deploy has
+# something real to show — outputs/ is otherwise gitignored.
+#
+# Setup: create a Blueprint on Render pointing at this repo. After the API service's
+# first deploy, copy its public URL into the web service's NEXT_PUBLIC_API_URL env var
+# in the Render dashboard (it's a Next.js public env var, so it's baked in at build
+# time — set it before the frontend's first build, or trigger a redeploy after).
+
+services:
+  - type: web
+    name: aeromesh-api
+    runtime: python
+    plan: free
+    rootDir: .
+    buildCommand: pip install -r requirements-api.txt
+    startCommand: uvicorn src.api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.6
+
+  - type: web
+    name: aeromesh-web
+    runtime: node
+    plan: free
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        sync: false  # set manually to the aeromesh-api service's public URL

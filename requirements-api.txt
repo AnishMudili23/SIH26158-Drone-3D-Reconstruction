@@ -1,0 +1,8 @@
+# Lightweight dependency set for deploying src/api/main.py as a viewer-only service
+# (e.g. Render). This is NOT the reconstruction pipeline's requirements.txt — the API
+# only reads already-computed JSON/GLB/LAS files and serves them over HTTP, so it
+# never needs torch, open3d, rasterio, or transformers. Keeping this separate avoids
+# multi-GB builds and rasterio's system GDAL dependency, which most PaaS Python
+# runtimes (including Render's non-Docker services) don't have preinstalled.
+fastapi==0.141.1
+uvicorn[standard]==0.53.0

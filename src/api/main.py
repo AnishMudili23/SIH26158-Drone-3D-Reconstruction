@@ -8,7 +8,16 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-import torch
+
+try:
+    # torch is only needed to report local GPU availability. This API also runs as a
+    # lightweight viewer-only deployment (see requirements-api.txt) that serves
+    # already-computed mission outputs and never touches torch/open3d/rasterio at
+    # all, so import failure here must degrade gracefully, not crash the app.
+    import torch
+    _TORCH_AVAILABLE = True
+except ImportError:
+    _TORCH_AVAILABLE = False
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OUTPUTS_DIR = REPO_ROOT / "outputs"
@@ -30,8 +39,11 @@ app.add_middleware(
 
 @app.get("/api/health")
 def health_check() -> dict[str, Any]:
-    gpu_available = torch.cuda.is_available()
-    gpu_name = torch.cuda.get_device_name(0) if gpu_available else "CPU"
+    if not _TORCH_AVAILABLE:
+        gpu_available, gpu_name = False, "N/A (viewer-only deployment, no local GPU)"
+    else:
+        gpu_available = torch.cuda.is_available()
+        gpu_name = torch.cuda.get_device_name(0) if gpu_available else "CPU"
     return {
         "status": "online",
         "version": "2.0.0",
