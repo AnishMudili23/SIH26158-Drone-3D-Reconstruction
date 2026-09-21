@@ -52,6 +52,10 @@ from confidence.confidence_report import (
 )
 from telemetry.flight_session import FlightSession
 from frame_processing.adaptive_keyframes import AdaptiveKeyframeEngine
+from sensor_fusion.sensor_quality import SensorQualityEvaluator
+from scene.semantic_voting import MultiViewSemanticVoter
+from scene.building_instances import BuildingInstanceExtractor
+from scene.semantic_quality import SemanticQualityEvaluator
 
 
 def run_pipeline(
@@ -285,6 +289,7 @@ def run_pipeline(
     print("\n[Stage 5/7] Georeferencing & scale alignment...")
     gps_fixes: list[GpsFix] = []
     telemetry_provenance = "NONE"
+    session: FlightSession | None = None
 
     if telemetry_path and Path(telemetry_path).exists():
         session = FlightSession.load_json(telemetry_path)
@@ -336,6 +341,29 @@ def run_pipeline(
         )
 
     # ---------------------------------------------------------
+    # Stage 5.4 — Sensor Quality Assessment & Adaptive Prior Policy
+    # ---------------------------------------------------------
+    sq_evaluator = SensorQualityEvaluator()
+    sensor_quality_rep = None
+    if has_geo and gps_fixes:
+        gps_enu_list = []
+        for gf in gps_fixes:
+            e, n, u = lla_to_enu(gf.lat, gf.lon, gf.alt_m, align_result.origin_lat, align_result.origin_lon, align_result.origin_alt_m)
+            gps_enu_list.append([e, n, u])
+        sensor_quality_rep = sq_evaluator.evaluate_trajectory(
+            np.array(gps_enu_list),
+            has_imu=bool(session and session.imu_measurements),
+            has_barometer=bool(session and session.barometer_measurements),
+        )
+    else:
+        sensor_quality_rep = sq_evaluator.evaluate_trajectory(None)
+
+    print("\n[Stage 5.4] Sensor Quality Assessment:")
+    print(f"  Quality Tier: {sensor_quality_rep.quality_tier.value} | BNR: {sensor_quality_rep.baseline_to_noise_ratio:.2f}")
+    print(f"  Recommended Mode: {sensor_quality_rep.recommended_mode} | Dynamic GPS Weight: {sensor_quality_rep.recommended_gps_weight:.4f}")
+    print(f"  Summary: {sensor_quality_rep.summary}")
+
+    # ---------------------------------------------------------
     # Stage 5.5 [optional] — Phase C: Geo-Constrained Pose Refinement
     # ---------------------------------------------------------
     geo_ba_report: dict | None = None
@@ -365,6 +393,12 @@ def run_pipeline(
                 e, n, u = lla_to_enu(gf.lat, gf.lon, gf.alt_m, align_result.origin_lat, align_result.origin_lon, align_result.origin_alt_m)
                 gps_priors_enu[gf.frame_name] = np.array([e, n, u])
 
+        effective_gps_weight = (
+            sensor_quality_rep.recommended_gps_weight
+            if geo_ba_gps_weight == 1.0
+            else geo_ba_gps_weight
+        )
+
         ba_result = refine_poses_with_gps_priors(
             camera_names=camera_names,
             rotations=rotations,
@@ -372,17 +406,17 @@ def run_pipeline(
             initial_centers=list(align_result.camera_centers_enu),
             observations=observations,
             gps_priors_enu=gps_priors_enu,
-            gps_weight=geo_ba_gps_weight,
+            gps_weight=effective_gps_weight,
         )
         print(f"  Refined {ba_result.n_cameras_refined} camera positions over {ba_result.n_observations} observations")
         print(f"  Mean reprojection error: {ba_result.mean_reprojection_error_px:.3f} px, "
-              f"mean GPS residual: {ba_result.mean_gps_residual_m:.3f} m")
+              f"mean GPS residual: {ba_result.mean_gps_residual_m:.3f} m (GPS weight: {effective_gps_weight:.4f})")
         geo_ba_report = {
             "n_cameras_refined": ba_result.n_cameras_refined,
             "n_observations": ba_result.n_observations,
             "mean_reprojection_error_px": ba_result.mean_reprojection_error_px,
             "mean_gps_residual_m": ba_result.mean_gps_residual_m,
-            "gps_weight_used": geo_ba_gps_weight,
+            "gps_weight_used": effective_gps_weight,
         }
         refined_trajectory = {
             name: {"enu": ba_result.refined_centers[name].tolist()} for name in camera_names
@@ -392,17 +426,45 @@ def run_pipeline(
                     "replace the primary georeferenced point cloud/mesh — camera positions only.",
             "summary": geo_ba_report,
             "trajectory": refined_trajectory,
-        }, indent=2))
+        }, indent=2), encoding="utf-8")
         print(f"  [Deliverable] Geo-constrained trajectory: {deliverables_dir / 'refined_trajectory.json'}")
 
     # ---------------------------------------------------------
-    # Stage 6: Semantic Class Tagging & Confidence
+    # Stage 6: Multi-View Semantic Voting & Building Extraction
     # ---------------------------------------------------------
-    print("\n[Stage 6/7] Applying semantic class tags & confidence tiers...")
-    class_tags = tag_points_by_class(clean_points, clean_point_ids, sparse_model, masks_dir or "")
-    class_names = tags_to_class_names(class_tags)
+    print("\n[Stage 6/7] Applying multi-view Bayesian semantic consensus & building extraction...")
+    voter = MultiViewSemanticVoter()
+    voting_res = voter.vote_points(clean_point_ids, sparse_model, masks_dir or "")
+    if len(voting_res.class_ids) == len(clean_points) and np.any(voting_res.class_ids != 7):
+        class_tags = voting_res.class_ids
+        class_names = voting_res.class_names
+        semantic_conf = voting_res.semantic_confidences
+    else:
+        class_tags = tag_points_by_class(clean_points, clean_point_ids, sparse_model, masks_dir or "")
+        class_names = tags_to_class_names(class_tags)
+        semantic_conf = None
+
     conf_tiers = compute_confidence_tiers(clean_track_len, clean_reproj_err)
     tier_names = np.array(["low", "medium", "high"])[conf_tiers]
+
+    # Building instance extraction via Open3D native DBSCAN. BuildingInstanceExtractor
+    # expects a per-point confidence in [0, 1], not a raw track length (which can exceed
+    # 1 for any point triangulated across more than one frame) — map the tier computed
+    # just above onto a numeric score so "mean_confidence" stays a real percentage.
+    point_confidence = np.array([0.3, 0.6, 0.9])[conf_tiers]
+    bldg_extractor = BuildingInstanceExtractor()
+    building_instances = bldg_extractor.extract_instances(align_result.points_enu, class_tags, point_confidence)
+    bldg_json_path = deliverables_dir / "building_instances.json"
+    bldg_extractor.save_instances_json(building_instances, bldg_json_path)
+    bldg_extractor.save_instances_json(building_instances, viewer_dir / "building_instances.json")
+    print(f"  [Deliverable] Building Instances: {bldg_json_path} ({len(building_instances)} structures detected)")
+
+    sem_quality_evaluator = SemanticQualityEvaluator()
+    semantic_quality_rep = sem_quality_evaluator.evaluate(semantic_conf, building_instances)
+    print(f"\n[Stage 6.1] Semantic Quality Assessment:")
+    print(f"  Quality Tier: {semantic_quality_rep.quality_tier.value}")
+    print(f"  Summary: {semantic_quality_rep.summary}")
+
 
     # ---------------------------------------------------------
     # Stage 7: Deliverables Generation
@@ -496,8 +558,11 @@ def run_pipeline(
             "epsg": epsg_code,
         } if has_geo else None,
         "geo_constrained_ba": geo_ba_report,
+        "sensor_quality": sensor_quality_rep.to_dict() if sensor_quality_rep else None,
+        "semantic_quality": semantic_quality_rep.to_dict(),
+        "building_instances": [b.to_dict() for b in building_instances],
     }
-    report_path.write_text(json.dumps(report_data, indent=2))
+    report_path.write_text(json.dumps(report_data, indent=2), encoding="utf-8")
     print(f"  [Deliverable] Metric Report: {report_path}")
 
     # 5. CesiumJS Web Viewer Bundle — needs real lat/lon, so only in georeferenced mode
@@ -523,9 +588,13 @@ def run_pipeline(
             "origin_lla": origin_dict,
             "n_points": len(viewer_points),
             "classes": sorted(set(class_names)),
+            "sensor_quality": sensor_quality_rep.to_dict() if sensor_quality_rep else None,
+            "semantic_quality": semantic_quality_rep.to_dict(),
+            "buildings": [b.to_dict() for b in building_instances],
             "points": viewer_points,
-        }))
+        }), encoding="utf-8")
         print(f"  [Viewer] Prepared CesiumJS point bundle: {viewer_dir / 'points.json'}")
+
 
         # Real per-frame flight trajectory (registered cameras only) — replaces any
         # synthetic/fabricated path the viewer might otherwise need to invent.
@@ -540,7 +609,7 @@ def run_pipeline(
         ]
         (viewer_dir / "trajectory.json").write_text(json.dumps({
             "origin": origin_dict, "n_frames": len(trajectory_points), "trajectory": trajectory_points,
-        }))
+        }), encoding="utf-8")
         print(f"  [Viewer] Prepared real flight trajectory: {viewer_dir / 'trajectory.json'} "
               f"({len(trajectory_points)} frames)")
     else:

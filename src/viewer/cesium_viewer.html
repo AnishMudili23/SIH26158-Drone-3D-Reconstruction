@@ -88,11 +88,11 @@
 
   <!-- Metric Accuracy Badge -->
   <div class="card" id="accuracy-card">
-    <div class="card-title"><span>METRIC ACCURACY</span> <span style="font-size:10px; color:#4ade80;">DEFENSE VERIFIED</span></div>
-    <div class="metric-row"><span>Scale Precision:</span> <span class="metric-val" id="val-scale">99.9%</span></div>
-    <div class="metric-row"><span>Mean GPS Residual:</span> <span class="metric-val" id="val-gps">0.000 m</span></div>
-    <div class="metric-row"><span>Mean Reproj Error:</span> <span class="metric-val" id="val-reproj">0.165 px</span></div>
-    <div class="metric-row"><span>High-Confidence Points:</span> <span class="metric-val" id="val-conf">95.7%</span></div>
+    <div class="card-title"><span>VALIDATION STATUS</span> <span style="font-size:10px; color:#94a3b8;">FROM CONFIDENCE REPORT</span></div>
+    <div class="metric-row"><span>Scale Factor:</span> <span class="metric-val" id="val-scale">—</span></div>
+    <div class="metric-row"><span>Mean GPS Residual:</span> <span class="metric-val" id="val-gps">—</span></div>
+    <div class="metric-row"><span>Mean Reproj Error:</span> <span class="metric-val" id="val-reproj">—</span></div>
+    <div class="metric-row"><span>High-Confidence Points:</span> <span class="metric-val" id="val-conf">—</span></div>
   </div>
 
   <!-- Categorical Layer Toggles -->
@@ -179,6 +179,9 @@ let droneEntity = null;
 let flightTrajectory = [];
 let isPlaying = false;
 let playInterval = null;
+let currentBuildings = [];
+let currentEnuMatrix = null;
+let buildingEntities = {};
 
 async function loadData(targetFolder) {
   if (currentModel) {
@@ -254,6 +257,43 @@ async function loadData(targetFolder) {
 
   const origin = data.origin_lla || data.origin;
   const originCartesian = Cesium.Cartesian3.fromDegrees(origin.lon, origin.lat, origin.alt);
+  currentEnuMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(originCartesian);
+
+  // Real per-building instances (footprint/height/volume/confidence from spatial
+  // DBSCAN clustering, computed in src/scene/building_instances.py) — clickable in
+  // 3D and selectable from the parent app's Structure Inspector via postMessage.
+  for (const id in buildingEntities) viewer.entities.remove(buildingEntities[id]);
+  buildingEntities = {};
+  currentBuildings = data.buildings || [];
+  for (const b of currentBuildings) {
+    const [e, n, u] = b.centroid_xyz;
+    const worldPos = Cesium.Matrix4.multiplyByPoint(
+      currentEnuMatrix, new Cesium.Cartesian3(e, n, u), new Cesium.Cartesian3()
+    );
+    const entity = viewer.entities.add({
+      id: `building-${b.instance_id}`,
+      position: worldPos,
+      point: {
+        pixelSize: 14,
+        color: Cesium.Color.YELLOW.withAlpha(0.85),
+        outlineColor: Cesium.Color.BLACK,
+        outlineWidth: 2,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      },
+      label: {
+        text: `#${b.instance_id}`,
+        font: "11px sans-serif",
+        fillColor: Cesium.Color.WHITE,
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+        outlineWidth: 2,
+        outlineColor: Cesium.Color.BLACK,
+        verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+        pixelOffset: new Cesium.Cartesian2(0, -12),
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      },
+    });
+    buildingEntities[b.instance_id] = entity;
+  }
 
   // Position camera to fit scene
   viewer.camera.flyTo({
@@ -422,15 +462,60 @@ function resetMeasurement() {
 }
 document.getElementById("reset-btn").addEventListener("click", resetMeasurement);
 
+// Renders a real per-building instance (footprint/height/volume/confidence from
+// src/scene/building_instances.py's DBSCAN clustering) in the structure panel, and
+// tells the parent app (if embedded) which instance is now selected so its own
+// Structure Inspector list stays in sync with the 3D scene.
+function showBuildingDetails(b, notifyParent) {
+  structDetails.innerHTML = `
+    <div class="metric-row"><span>Structure:</span> <span class="metric-val">#${b.instance_id}</span></div>
+    <div class="metric-row"><span>Footprint Area:</span> <span class="metric-val">${b.footprint_area_m2.toFixed(2)} m²</span></div>
+    <div class="metric-row"><span>Height:</span> <span class="metric-val">${b.height_m.toFixed(2)} m</span></div>
+    <div class="metric-row"><span>Volume Estimate:</span> <span class="metric-val">${b.volume_m3.toFixed(1)} m³</span></div>
+    <div class="metric-row"><span>Confidence:</span> <span class="metric-val">${(b.mean_confidence * 100).toFixed(1)}%</span></div>
+    <div class="metric-row"><span>Points:</span> <span class="metric-val">${b.point_count.toLocaleString()}</span></div>
+  `;
+  if (notifyParent && window.parent !== window) {
+    window.parent.postMessage({ type: "buildingSelected", instance_id: b.instance_id }, "*");
+  }
+}
+
+function focusBuilding(instanceId) {
+  const b = currentBuildings.find((x) => x.instance_id === instanceId);
+  const entity = buildingEntities[instanceId];
+  if (!b || !entity || !currentEnuMatrix) return;
+  viewer.flyTo(entity, { duration: 1.2, offset: new Cesium.HeadingPitchRange(0, Cesium.Math.toRadians(-35), 60) });
+  showBuildingDetails(b, false);
+}
+
+// Lets the parent app (React Structure Inspector) drive the 3D scene — clicking a
+// "Structure #N" pill there flies the camera here and shows the same real metrics.
+window.addEventListener("message", (event) => {
+  const msg = event.data;
+  if (msg && msg.type === "focusBuilding" && typeof msg.instance_id === "number") {
+    focusBuilding(msg.instance_id);
+  }
+});
+
 const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
 handler.setInputAction((click) => {
+  // Clicking a building marker takes priority over the generic point readout below.
+  const picked = viewer.scene.pick(click.position);
+  if (Cesium.defined(picked) && picked.id && typeof picked.id.id === "string" && picked.id.id.startsWith("building-")) {
+    const instanceId = parseInt(picked.id.id.slice("building-".length), 10);
+    const b = currentBuildings.find((x) => x.instance_id === instanceId);
+    if (b) {
+      showBuildingDetails(b, true);
+      return;
+    }
+  }
+
   const cartesian = viewer.scene.pickPosition(click.position);
   if (!Cesium.defined(cartesian)) return;
 
-  // Structure Inspection — reports the actually-clicked point's real attributes.
-  // There is no per-building instance segmentation in this pipeline yet, so this
-  // is deliberately a point-level readout plus the reconstruction-WIDE volumetric
-  // aggregate (clearly labeled as such), not a fabricated per-structure number.
+  // Fallback: no building marker was clicked, so report the nearest reconstructed
+  // point's own attributes plus the reconstruction-wide volumetric aggregate
+  // (clearly labeled as such — not a fabricated per-structure number).
   if (currentDataset && allPointRecords.length > 0) {
     let nearest = null, nearestDist = Infinity;
     for (const rec of allPointRecords) {
@@ -478,7 +563,30 @@ handler.setInputAction((click) => {
 }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
 viewer.scene.globe.depthTestAgainstTerrain = false;
-loadData();
+
+// When embedded in the Next.js app's viewport, the React sidebar and PiP video
+// already cover dataset selection and onboard video — this HTML's own copies of
+// those controls would just duplicate the UI, so hide them and drive dataset
+// choice from the query string instead.
+const urlParams = new URLSearchParams(window.location.search);
+const embedMode = urlParams.get("embed") === "1";
+const initialDataset = urlParams.get("dataset");
+if (embedMode) {
+  document.getElementById("panel").style.display = "none";
+  const pipBox = document.getElementById("pip-box");
+  if (pipBox) pipBox.style.display = "none";
+}
+if (initialDataset) {
+  const select = document.getElementById("dataset-select");
+  if (![...select.options].some((o) => o.value === initialDataset)) {
+    const opt = document.createElement("option");
+    opt.value = initialDataset;
+    opt.textContent = initialDataset;
+    select.appendChild(opt);
+  }
+  select.value = initialDataset;
+}
+loadData(initialDataset || undefined);
 </script>
 </body>
 </html>
