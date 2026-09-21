@@ -75,8 +75,12 @@ def test_multifactor_uncertainty_model():
     # Point 0: low reproj error, high track length -> HIGH tier
     assert scores[0].tier == ConfidenceTier.HIGH
     assert scores[0].total_confidence >= 0.70
-    # Point 1: high reproj error, low track length -> MEDIUM or LOW tier
-    assert scores[1].tier in (ConfidenceTier.MEDIUM, ConfidenceTier.LOW)
+    assert scores[0].depth_consistency_score is None
+    assert scores[0].sensor_agreement_score is None
+    # Point 1: high reproj error (1.8px), min track length (2 views) -> truthfully UNOBSERVED/LOW without fake defaults
+    assert scores[1].tier in (ConfidenceTier.LOW, ConfidenceTier.UNOBSERVED)
+    assert scores[1].total_confidence < 0.40
+
 
 
 def test_quality_report_formatting():
