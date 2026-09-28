@@ -137,20 +137,51 @@
 </div>
 
 <script>
-Cesium.Ion.defaultAccessToken = undefined;
+Cesium.Ion.defaultAccessToken = "";
 
-const viewer = new Cesium.Viewer("cesiumContainer", {
-  baseLayerPicker: false,
-  geocoder: false,
-  homeButton: false,
-  sceneModePicker: false,
-  navigationHelpButton: false,
-  animation: false,
-  timeline: false,
-  fullscreenButton: false,
-  imageryProvider: false,
-  terrainProvider: new Cesium.EllipsoidTerrainProvider(),
-});
+let viewer;
+try {
+  viewer = new Cesium.Viewer("cesiumContainer", {
+    baseLayer: false,
+    baseLayerPicker: false,
+    geocoder: false,
+    homeButton: false,
+    sceneModePicker: false,
+    navigationHelpButton: false,
+    animation: false,
+    timeline: false,
+    fullscreenButton: false,
+    infoBox: false,
+    selectionIndicator: false,
+    contextOptions: {
+      webgl: {
+        alpha: true,
+        depth: true,
+        stencil: false,
+        antialias: true,
+        premultipliedAlpha: true,
+        preserveDrawingBuffer: true,
+        failIfMajorPerformanceCaveat: false,
+      },
+    },
+  });
+} catch (err) {
+  console.warn("Retrying Cesium Viewer without custom contextOptions:", err);
+  viewer = new Cesium.Viewer("cesiumContainer", {
+    baseLayer: false,
+    baseLayerPicker: false,
+    geocoder: false,
+    homeButton: false,
+    sceneModePicker: false,
+    navigationHelpButton: false,
+    animation: false,
+    timeline: false,
+    fullscreenButton: false,
+    infoBox: false,
+    selectionIndicator: false,
+  });
+}
+
 viewer.scene.globe.show = false;
 viewer.scene.backgroundColor = Cesium.Color.fromCssColorString("#05070a");
 
