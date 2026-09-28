@@ -21,6 +21,7 @@ outputs/
 checkpoints/
 *.pth
 *.onnx
+*.zip
 
 # OS
 Thumbs.db
