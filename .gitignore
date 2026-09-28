@@ -9,8 +9,10 @@ venv/
 data/raw/
 data/datasets/
 /datasets/
-outputs/
-*.mp4
+outputs/*
+checkpoints/
+*.pth
+*.onnx
 *.mov
 *.avi
 *.ply
@@ -18,10 +20,35 @@ outputs/
 *.glb
 *.tif
 *.tiff
-checkpoints/
-*.pth
-*.onnx
 *.zip
+*.mp4
+
+# Operational Zurich Infrastructure Demo Showpiece (Included in repository)
+!outputs/zurich_mav_mission/
+!outputs/zurich_mav_mission/viewer_data/
+!outputs/zurich_mav_mission/viewer_data/**
+!outputs/zurich_mav_mission/deliverables/
+!outputs/zurich_mav_mission/deliverables/**
+!outputs/zurich_mav_mission/drone_flight_zurich.mp4
+!outputs/zurich_mav_mission/AeroMesh_zurich_mav_mission_package.zip
+!outputs/zurich_mav_mission/viewer_data/*.glb
+!outputs/zurich_mav_mission/viewer_data/*.json
+!outputs/zurich_mav_mission/deliverables/*.glb
+!outputs/zurich_mav_mission/deliverables/*.ply
+!outputs/zurich_mav_mission/deliverables/*.las
+!outputs/zurich_mav_mission/deliverables/*.laz
+!outputs/zurich_mav_mission/deliverables/*.tif
+!outputs/zurich_mav_mission/deliverables/*.tiff
+!outputs/zurich_mav_mission/deliverables/*.png
+!outputs/zurich_mav_mission/deliverables/*.json
+!outputs/zurich_mav_mission/*.zip
+!outputs/zurich_mav_mission/*.mp4
+
+# Intermediate pipeline artifacts (not needed for viewer/API)
+outputs/zurich_mav_mission/masks/
+outputs/zurich_mav_mission/colmap_masks/
+outputs/zurich_mav_mission/frames/
+outputs/zurich_mav_mission/reconstruction/
 
 # OS
 Thumbs.db

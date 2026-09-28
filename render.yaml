@@ -6,9 +6,9 @@
 # standard Render web service. The API here only reads and serves already-computed
 # mission outputs (see requirements-api.txt vs. requirements.txt).
 #
-# One demo mission's outputs (outputs/real_world_4thave_run/{deliverables,viewer_data},
-# ~24MB, no raw video) are committed to the repo specifically so a fresh deploy has
-# something real to show — outputs/ is otherwise gitignored.
+# The primary demo mission's outputs (outputs/zurich_mav_mission/{deliverables,viewer_data},
+# ~28MB, including video, mesh, point cloud, and deliverables) are committed to the repo
+# specifically so a fresh deploy has the complete Zurich Infrastructure Demo ready to run.
 #
 # Setup: create a Blueprint on Render pointing at this repo. After the API service's
 # first deploy, copy its public URL into the web service's NEXT_PUBLIC_API_URL env var

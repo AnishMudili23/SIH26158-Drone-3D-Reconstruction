@@ -1,0 +1,106 @@
+{
+  "dataset": "outputs\\zurich_mav_benchmark\\undistorted",
+  "telemetry_provenance": "REAL",
+  "georeferenced": true,
+  "total_input_frames": 350,
+  "registered_frames": 350,
+  "registration_rate_pct": 100.0,
+  "sparse_points": 32289,
+  "scale_factor": 0.14087487054861061,
+  "mean_gps_residual_m": 0.6131248722850203,
+  "mean_reprojection_error_px": 0.8472590446472168,
+  "high_confidence_points_pct": 56.18941435163678,
+  "class_breakdown": [
+    {
+      "class_name": "Background clutter",
+      "n_points": 2851,
+      "pct_high": 67.7306208347948,
+      "pct_medium": 30.726061031217117,
+      "pct_low": 1.5433181339880744,
+      "mean_track_len": 48.937564849853516,
+      "mean_reprojection_error_px": 0.744271993637085
+    },
+    {
+      "class_name": "Building",
+      "n_points": 21719,
+      "pct_high": 50.13582577466734,
+      "pct_medium": 43.353745568396334,
+      "pct_low": 6.510428656936323,
+      "mean_track_len": 46.96648025512695,
+      "mean_reprojection_error_px": 0.8874490261077881
+    },
+    {
+      "class_name": "Human",
+      "n_points": 5,
+      "pct_high": 60.0,
+      "pct_medium": 40.0,
+      "pct_low": 0.0,
+      "mean_track_len": 11.800000190734863,
+      "mean_reprojection_error_px": 0.7666924595832825
+    },
+    {
+      "class_name": "Low vegetation",
+      "n_points": 131,
+      "pct_high": 67.17557251908397,
+      "pct_medium": 32.06106870229007,
+      "pct_low": 0.7633587786259541,
+      "mean_track_len": 35.229007720947266,
+      "mean_reprojection_error_px": 0.7260012626647949
+    },
+    {
+      "class_name": "Moving car",
+      "n_points": 49,
+      "pct_high": 55.10204081632652,
+      "pct_medium": 40.816326530612244,
+      "pct_low": 4.081632653061225,
+      "mean_track_len": 45.28571319580078,
+      "mean_reprojection_error_px": 0.9282775521278381
+    },
+    {
+      "class_name": "Road",
+      "n_points": 480,
+      "pct_high": 75.0,
+      "pct_medium": 22.291666666666668,
+      "pct_low": 2.7083333333333335,
+      "mean_track_len": 56.87708282470703,
+      "mean_reprojection_error_px": 0.6539098620414734
+    },
+    {
+      "class_name": "Static car",
+      "n_points": 39,
+      "pct_high": 51.28205128205128,
+      "pct_medium": 48.717948717948715,
+      "pct_low": 0.0,
+      "mean_track_len": 47.46154022216797,
+      "mean_reprojection_error_px": 0.9391034245491028
+    },
+    {
+      "class_name": "Tree",
+      "n_points": 7015,
+      "pct_high": 68.78118317890235,
+      "pct_medium": 28.681397006414826,
+      "pct_low": 2.5374198146828224,
+      "mean_track_len": 54.7442626953125,
+      "mean_reprojection_error_px": 0.7791578769683838
+    }
+  ],
+  "volumetric_metrics": {
+    "total_above_ground_volume_m3": 110.95916748046875,
+    "elevated_surface_area_m2": 22.5,
+    "mean_elevated_height_m": 4.9315185546875,
+    "max_height_m": 12.597818374633789
+  },
+  "georeference_origin": {
+    "lat": 47.3843571,
+    "lon": 8.5451784,
+    "alt_m": 464.91,
+    "epsg": 32632
+  },
+  "geo_constrained_ba": {
+    "n_cameras_refined": 350,
+    "n_observations": 1579662,
+    "mean_reprojection_error_px": 0.8277596338911252,
+    "mean_gps_residual_m": 0.6131254142847841,
+    "gps_weight_used": 1.0
+  }
+}

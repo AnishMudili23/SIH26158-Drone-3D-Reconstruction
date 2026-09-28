@@ -1,0 +1,55 @@
+{
+  "total_buildings": 2,
+  "buildings": [
+    {
+      "instance_id": 1,
+      "centroid_xyz": [
+        -3.384,
+        -0.777,
+        5.41
+      ],
+      "footprint_area_m2": 93.33,
+      "base_elevation_m": 0.99,
+      "peak_elevation_m": 12.79,
+      "height_m": 11.81,
+      "volume_m3": 936.65,
+      "point_count": 21129,
+      "mean_confidence": 0.85,
+      "bounding_box_min": [
+        -11.639,
+        -5.556,
+        -0.642
+      ],
+      "bounding_box_max": [
+        1.355,
+        4.889,
+        17.642
+      ]
+    },
+    {
+      "instance_id": 2,
+      "centroid_xyz": [
+        -14.322,
+        2.35,
+        20.024
+      ],
+      "footprint_area_m2": 30.8,
+      "base_elevation_m": 17.53,
+      "peak_elevation_m": 22.53,
+      "height_m": 5.0,
+      "volume_m3": 130.91,
+      "point_count": 584,
+      "mean_confidence": 0.85,
+      "bounding_box_min": [
+        -16.468,
+        -3.352,
+        16.692
+      ],
+      "bounding_box_max": [
+        -11.889,
+        7.284,
+        25.333
+      ]
+    }
+  ]
+}
