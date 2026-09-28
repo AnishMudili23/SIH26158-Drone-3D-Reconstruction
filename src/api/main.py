@@ -579,7 +579,8 @@ def download_asset_endpoint(mission_id: str, asset_type: str):
 
 # Mount static output files
 if OUTPUTS_DIR.exists():
-    app.mount("/static/outputs", StaticFiles(directory=str(OUTPUTS_DIR)), name="outputs")
+    app.mount("/static/outputs", StaticFiles(directory=str(OUTPUTS_DIR)), name="outputs_static")
+    app.mount("/outputs", StaticFiles(directory=str(OUTPUTS_DIR)), name="outputs")
 
 # Mount viewer bundle
 viewer_html_dir = REPO_ROOT / "src" / "viewer"
