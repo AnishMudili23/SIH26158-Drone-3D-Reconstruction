@@ -191,7 +191,13 @@ async function loadData(targetFolder) {
     currentModel = null;
   }
   for (const cls in pointsByClass) {
-    viewer.scene.primitives.remove(pointsByClass[cls]);
+    if (Array.isArray(pointsByClass[cls])) {
+      for (const col of pointsByClass[cls]) {
+        viewer.scene.primitives.remove(col);
+      }
+    } else if (pointsByClass[cls]) {
+      viewer.scene.primitives.remove(pointsByClass[cls]);
+    }
   }
   if (droneEntity) {
     viewer.entities.remove(droneEntity);
@@ -297,10 +303,16 @@ async function loadData(targetFolder) {
     buildingEntities[b.instance_id] = entity;
   }
 
-  // Build class primitive collections and toggles
+  // Build class primitive collections and toggles with 8,000-point chunking
+  // (Cesium PointPrimitiveCollection uses 16-bit index buffers with 4 vertices/point;
+  // chunking at 8,000 points prevents RangeError: Invalid array length when points > 16,384)
   const toggleContainer = document.getElementById("class-toggles");
+  const MAX_POINTS_PER_COLLECTION = 8000;
+
   for (const cls of classes) {
-    pointsByClass[cls] = viewer.scene.primitives.add(new Cesium.PointPrimitiveCollection());
+    pointsByClass[cls] = [];
+    const firstCollection = viewer.scene.primitives.add(new Cesium.PointPrimitiveCollection());
+    pointsByClass[cls].push(firstCollection);
 
     const color = CLASS_COLORS[cls] || Cesium.Color.WHITE;
     const swatch = document.createElement("span");
@@ -312,7 +324,11 @@ async function loadData(targetFolder) {
     checkbox.type = "checkbox";
     checkbox.checked = true;
     checkbox.addEventListener("change", () => {
-      pointsByClass[cls].show = checkbox.checked;
+      if (pointsByClass[cls]) {
+        for (const col of pointsByClass[cls]) {
+          col.show = checkbox.checked;
+        }
+      }
     });
 
     const count = data.points.filter(p => p.class === cls).length;
@@ -322,24 +338,42 @@ async function loadData(targetFolder) {
     toggleContainer.appendChild(label);
   }
 
-  // Populate point cloud
+  // Populate point cloud safely across batched collections
   const pointPositions = [];
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+
   for (const p of data.points) {
     const position = Cesium.Cartesian3.fromDegrees(p.lon, p.lat, p.alt);
     const color = showConfidence ? CONFIDENCE_COLORS[p.confidence] : (CLASS_COLORS[p.class] || Cesium.Color.WHITE);
-    const primitive = pointsByClass[p.class].add({ position, color, pixelSize: 4 });
+    
+    if (!pointsByClass[p.class]) {
+      pointsByClass[p.class] = [];
+    }
+    let currentCollection = pointsByClass[p.class][pointsByClass[p.class].length - 1];
+    if (!currentCollection || currentCollection.length >= MAX_POINTS_PER_COLLECTION) {
+      currentCollection = viewer.scene.primitives.add(new Cesium.PointPrimitiveCollection());
+      pointsByClass[p.class].push(currentCollection);
+    }
+
+    const primitive = currentCollection.add({ position, color, pixelSize: 4 });
     allPointRecords.push({ primitive, cls: p.class, confidence: p.confidence, alt: p.alt, lat: p.lat, lon: p.lon });
     pointPositions.push(position);
+
+    if (position.x < minX) minX = position.x; if (position.x > maxX) maxX = position.x;
+    if (position.y < minY) minY = position.y; if (position.y > maxY) maxY = position.y;
+    if (position.z < minZ) minZ = position.z; if (position.z > maxZ) maxZ = position.z;
   }
 
   // XYZ axis gizmo at the scene origin (0,0,0 in the ENU frame everything else —
-  // buildings, mesh, points — is expressed in). Sized relative to the actual point
-  // cloud extent so it's visible but doesn't dwarf small scenes or vanish in large
-  // ones, rather than a fixed length guessed independent of the data.
+  // buildings, mesh, points — is expressed in).
   for (const e of axisEntities) viewer.entities.remove(e);
   axisEntities = [];
-  const sceneBoundingSphere = pointPositions.length > 0
-    ? Cesium.BoundingSphere.fromPoints(pointPositions)
+  const sceneBoundingSphere = pointPositions.length > 0 && isFinite(minX)
+    ? Cesium.BoundingSphere.fromCornerPoints(
+        new Cesium.Cartesian3(minX, minY, minZ),
+        new Cesium.Cartesian3(maxX, maxY, maxZ)
+      )
     : new Cesium.BoundingSphere(originCartesian, 30);
   const axisLength = Cesium.Math.clamp(sceneBoundingSphere.radius * 0.3, 5, 100);
   const AXES = [
