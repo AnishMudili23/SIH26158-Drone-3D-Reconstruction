@@ -20,11 +20,14 @@ if str(REPO_ROOT / "src") not in sys.path:
 
 from api import mission_manager
 
-try:
-    import torch
-    _TORCH_AVAILABLE = True
-except ImportError:
-    _TORCH_AVAILABLE = False
+def _get_gpu_info() -> tuple[bool, str]:
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return True, torch.cuda.get_device_name(0)
+        return False, "CPU"
+    except Exception:
+        return False, "N/A (viewer-only deployment, no local GPU)"
 
 class CreateMissionRequest(BaseModel):
     name: str
@@ -52,11 +55,7 @@ app.add_middleware(
 
 @app.get("/api/health")
 def health_check() -> dict[str, Any]:
-    if not _TORCH_AVAILABLE:
-        gpu_available, gpu_name = False, "N/A (viewer-only deployment, no local GPU)"
-    else:
-        gpu_available = torch.cuda.is_available()
-        gpu_name = torch.cuda.get_device_name(0) if gpu_available else "CPU"
+    gpu_available, gpu_name = _get_gpu_info()
     return {
         "status": "online",
         "version": "2.0.0",

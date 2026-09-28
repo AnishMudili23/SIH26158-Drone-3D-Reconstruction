@@ -36,5 +36,7 @@ services:
     buildCommand: npm install && npm run build
     startCommand: npm start
     envVars:
+      - key: NODE_VERSION
+        value: 20
       - key: NEXT_PUBLIC_API_URL
         sync: false  # set manually to the aeromesh-api service's public URL
