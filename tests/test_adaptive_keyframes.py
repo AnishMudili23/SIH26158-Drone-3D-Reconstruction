@@ -65,3 +65,26 @@ def test_exposure_extremes_filtered():
     scores = engine.select_keyframes([dark_img, good_img], [0.0, 0.5])
     assert not scores[0].is_selected
     assert scores[0].rejection_reason == "poor_exposure" or scores[0].rejection_reason == "blur_detected"
+
+
+def test_telemetry_baseline_source_provenance():
+    engine = AdaptiveKeyframeEngine(min_baseline_m=0.5)
+
+    img1 = np.full((200, 200), 100, dtype=np.uint8)
+    img1[::20, :] = 250
+    img1[:, ::20] = 250
+    img2 = np.roll(img1, shift=30, axis=1)
+
+    # 1. With real GPS positions
+    positions = [(0.0, 0.0, 50.0), (3.5, 0.0, 50.0)]
+    scores = engine.select_keyframes([img1, img2], [0.0, 1.0], positions_enu=positions)
+    assert scores[1].baseline_source == "GPS"
+    assert scores[1].baseline_confidence >= 0.90
+    assert scores[1].baseline_distance_m == pytest.approx(3.5, rel=1e-3)
+
+    # 2. Without GPS (uses optical flow, not assumed 2 m/s velocity)
+    scores_nofix = engine.select_keyframes([img1, img2], [0.0, 1.0])
+    assert scores_nofix[1].baseline_source == "OPTICAL_FLOW"
+    assert scores_nofix[1].baseline_confidence > 0.70
+    assert scores_nofix[1].feature_quality > 0.0
+    assert scores_nofix[1].composite_score > 0.0

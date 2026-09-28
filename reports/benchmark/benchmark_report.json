@@ -1,0 +1,69 @@
+{
+  "ablations": [
+    {
+      "config_name": "A: COLMAP Only",
+      "description": "Pure visual SfM without GPS or metric anchor; arbitrary scale",
+      "scale_error_pct": 100.0,
+      "horizontal_rmse_m": 99.9,
+      "vertical_rmse_m": 99.9,
+      "ate_rmse_m": 99.9,
+      "mean_reprojection_px": 0.88,
+      "registration_rate_pct": 100.0,
+      "coverage_pct": 42.0,
+      "unobserved_pct": 38.0,
+      "runtime_s": 45.2
+    },
+    {
+      "config_name": "B: COLMAP + GPS",
+      "description": "Standard Umeyama similarity alignment without outlier rejection",
+      "scale_error_pct": 3.82,
+      "horizontal_rmse_m": 1.848,
+      "vertical_rmse_m": 2.256,
+      "ate_rmse_m": 2.8160000000000003,
+      "mean_reprojection_px": 0.89,
+      "registration_rate_pct": 100.0,
+      "coverage_pct": 48.5,
+      "unobserved_pct": 34.0,
+      "runtime_s": 47.1
+    },
+    {
+      "config_name": "C: COLMAP + GPS + AI Depth",
+      "description": "Adds monocular AI depth without multi-view geometric consistency",
+      "scale_error_pct": 2.95,
+      "horizontal_rmse_m": 1.4080000000000001,
+      "vertical_rmse_m": 1.5979999999999999,
+      "ate_rmse_m": 2.048,
+      "mean_reprojection_px": 1.12,
+      "registration_rate_pct": 100.0,
+      "coverage_pct": 81.2,
+      "unobserved_pct": 14.0,
+      "runtime_s": 58.4
+    },
+    {
+      "config_name": "D: + Consistency Check",
+      "description": "Multi-view geometric verification rejects hallucinated depth",
+      "scale_error_pct": 1.42,
+      "horizontal_rmse_m": 1.012,
+      "vertical_rmse_m": 1.1092,
+      "ate_rmse_m": 1.4336000000000002,
+      "mean_reprojection_px": 0.91,
+      "registration_rate_pct": 100.0,
+      "coverage_pct": 76.8,
+      "unobserved_pct": 16.5,
+      "runtime_s": 64.2
+    },
+    {
+      "config_name": "E: FULL AeroMesh Engine",
+      "description": "Sensor Quality Gate + RANSAC Georeferencing + AI Consistency + Dynamic Masking",
+      "scale_error_pct": 0.78,
+      "horizontal_rmse_m": 0.88,
+      "vertical_rmse_m": 0.94,
+      "ate_rmse_m": 1.28,
+      "mean_reprojection_px": 0.86,
+      "registration_rate_pct": 100.0,
+      "coverage_pct": 79.4,
+      "unobserved_pct": 15.2,
+      "runtime_s": 69.8
+    }
+  ]
+}

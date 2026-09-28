@@ -81,25 +81,55 @@ def test_align_geometry_to_gps_recovers_known_scale():
 
 
 def test_rederive_pose_for_aligned_world_projects_identically():
-    from geo.scale_alignment import _rederive_pose_for_aligned_world
+    from geo.scale_alignment import _rederive_pose_for_aligned_world, rederive_aligned_camera
+    from common.coordinate_frames import SimilarityTransform, project_world_point
 
     rng = np.random.default_rng(0)
-    r_orig = np.linalg.qr(rng.normal(size=(3, 3)))[0]
+    # Generate proper orthonormal rotation matrices (det == +1)
+    q1, _ = np.linalg.qr(rng.normal(size=(3, 3)))
+    if np.linalg.det(q1) < 0:
+        q1[:, 0] *= -1
+    r_orig = q1
     t_orig = rng.normal(size=3)
-    pose = CameraPose(frame_path="f.jpg", rotation=r_orig, translation=t_orig, intrinsics=np.eye(3))
+    k = np.array([[800.0, 0.0, 320.0], [0.0, 800.0, 240.0], [0.0, 0.0, 1.0]])
+    pose = CameraPose(frame_path="f.jpg", rotation=r_orig, translation=t_orig, intrinsics=k)
 
     scale = 3.7
-    rot = np.linalg.qr(rng.normal(size=(3, 3)))[0]
+    q2, _ = np.linalg.qr(rng.normal(size=(3, 3)))
+    if np.linalg.det(q2) < 0:
+        q2[:, 0] *= -1
+    rot = q2
     t = rng.normal(size=3)
+    transform = SimilarityTransform(scale=scale, rotation=rot, translation=t)
 
-    x_orig = rng.normal(size=3)
-    x_aligned = scale * rot @ x_orig + t
+    # Point in front of camera
+    c_orig = -r_orig.T @ t_orig
+    x_orig = c_orig + r_orig.T @ np.array([1.0, 2.0, 15.0])
+    x_aligned = transform.transform_points(x_orig)
 
-    x_cam_direct = r_orig @ x_orig + t_orig
     new_pose = _rederive_pose_for_aligned_world(pose, scale, rot, t)
-    x_cam_via_aligned = new_pose.rotation @ x_aligned + new_pose.translation
+    aligned_pose, traj_enu = rederive_aligned_camera(pose, transform)
 
-    np.testing.assert_allclose(x_cam_direct, x_cam_via_aligned, atol=1e-9)
+    # 1. Rotation is strictly orthonormal (det == 1 and R @ R.T == I)
+    np.testing.assert_allclose(new_pose.rotation @ new_pose.rotation.T, np.eye(3), atol=1e-9)
+    assert np.linalg.det(new_pose.rotation) == pytest.approx(1.0, rel=1e-6)
+
+    # 2. Camera center is exactly transformed into ENU: C_enu = -R.T @ t
+    c_aligned_expected = transform.transform_camera_center(c_orig)
+    np.testing.assert_allclose(-new_pose.rotation.T @ new_pose.translation, c_aligned_expected, atol=1e-9)
+    np.testing.assert_allclose(traj_enu.center_enu, c_aligned_expected, atol=1e-9)
+
+    # 3. Pinhole projection of aligned 3D point matches original SfM projection exactly
+    p_cam_direct = r_orig @ x_orig + t_orig
+    p_pix_direct = k @ (p_cam_direct / p_cam_direct[2])
+
+    p_cam_aligned = new_pose.rotation @ x_aligned + new_pose.translation
+    p_pix_aligned = k @ (p_cam_aligned / p_cam_aligned[2])
+    np.testing.assert_allclose(p_pix_direct[:2], p_pix_aligned[:2], atol=1e-9)
+
+    # 4. project_world_point produces identical pixel coordinates
+    p_proj = project_world_point(x_aligned, traj_enu.center_enu, traj_enu.rotation, k)
+    np.testing.assert_allclose(p_pix_direct[:2], p_proj, atol=1e-9)
 
 
 def test_align_geometry_to_gps_raises_on_too_few_matches():

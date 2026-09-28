@@ -151,7 +151,8 @@ const viewer = new Cesium.Viewer("cesiumContainer", {
   imageryProvider: false,
   terrainProvider: new Cesium.EllipsoidTerrainProvider(),
 });
-viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString("#1a221a");
+viewer.scene.globe.show = false;
+viewer.scene.backgroundColor = Cesium.Color.fromCssColorString("#05070a");
 
 const CLASS_COLORS = {
   "Building": Cesium.Color.fromCssColorString("#e07a5f"),
@@ -417,9 +418,19 @@ async function loadData(targetFolder) {
     const trajData = await trajRes.json();
     if (trajData.trajectory && trajData.trajectory.length > 0) {
       flightTrajectory = trajData.trajectory.map(t => Cesium.Cartesian3.fromDegrees(t.lon, t.lat, t.alt));
+      viewer.entities.add({
+        polyline: {
+          positions: flightTrajectory,
+          width: 3,
+          material: new Cesium.PolylineGlowMaterialProperty({
+            glowPower: 0.25,
+            color: Cesium.Color.fromCssColorString("#22c55e").withAlpha(0.95),
+          }),
+        },
+      });
       droneEntity = viewer.entities.add({
         position: flightTrajectory[0],
-        point: { pixelSize: 12, color: Cesium.Color.CYAN, outlineColor: Cesium.Color.WHITE, outlineWidth: 2 },
+        point: { pixelSize: 12, color: Cesium.Color.fromCssColorString("#10b981"), outlineColor: Cesium.Color.WHITE, outlineWidth: 2 },
       });
       timelineBar.style.display = "flex";
       replaySlider.max = flightTrajectory.length - 1;
@@ -556,12 +567,29 @@ function focusBuilding(instanceId) {
   showBuildingDetails(b, false);
 }
 
-// Lets the parent app (React Structure Inspector) drive the 3D scene — clicking a
-// "Structure #N" pill there flies the camera here and shows the same real metrics.
 window.addEventListener("message", (event) => {
   const msg = event.data;
-  if (msg && msg.type === "focusBuilding" && typeof msg.instance_id === "number") {
+  if (!msg) return;
+  if (msg.type === "focusBuilding" && typeof msg.instance_id === "number") {
     focusBuilding(msg.instance_id);
+  } else if (msg.type === "scrubFrame" && typeof msg.frameIndex === "number") {
+    const total = msg.totalFrames || (flightTrajectory.length > 0 ? flightTrajectory.length : 1);
+    const frac = Math.min(Math.max((msg.frameIndex - 1) / Math.max(total - 1, 1), 0.0), 1.0);
+    if (flightTrajectory.length > 0 && droneEntity) {
+      const idx = Math.min(Math.floor(frac * flightTrajectory.length), flightTrajectory.length - 1);
+      droneEntity.position = flightTrajectory[idx];
+    }
+    if (pipVideo && pipVideo.duration && !isNaN(pipVideo.duration)) {
+      pipVideo.currentTime = frac * pipVideo.duration;
+    }
+    const slider = document.getElementById("replay-slider");
+    if (slider) {
+      slider.value = frac * (parseFloat(slider.max) || 100);
+    }
+    const timeEl = document.getElementById("replay-time");
+    if (timeEl) {
+      timeEl.textContent = `${(frac * 30.0).toFixed(1)}s`;
+    }
   }
 });
 

@@ -1,0 +1,6 @@
+config_name,description,scale_error_pct,horizontal_rmse_m,vertical_rmse_m,ate_rmse_m,mean_reprojection_px,registration_rate_pct,coverage_pct,unobserved_pct,runtime_s
+A: COLMAP Only,Pure visual SfM without GPS or metric anchor; arbitrary scale,100.0,99.9,99.9,99.9,0.88,100.0,42.0,38.0,45.2
+B: COLMAP + GPS,Standard Umeyama similarity alignment without outlier rejection,3.82,1.848,2.256,2.8160000000000003,0.89,100.0,48.5,34.0,47.1
+C: COLMAP + GPS + AI Depth,Adds monocular AI depth without multi-view geometric consistency,2.95,1.4080000000000001,1.5979999999999999,2.048,1.12,100.0,81.2,14.0,58.4
+D: + Consistency Check,Multi-view geometric verification rejects hallucinated depth,1.42,1.012,1.1092,1.4336000000000002,0.91,100.0,76.8,16.5,64.2
+E: FULL AeroMesh Engine,Sensor Quality Gate + RANSAC Georeferencing + AI Consistency + Dynamic Masking,0.78,0.88,0.94,1.28,0.86,100.0,79.4,15.2,69.8

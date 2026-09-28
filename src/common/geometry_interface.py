@@ -19,6 +19,8 @@ from typing import Protocol
 
 import numpy as np
 
+from common.coordinate_frames import CoordinateFrame
+
 
 @dataclass
 class CameraPose:
@@ -26,6 +28,12 @@ class CameraPose:
     rotation: np.ndarray      # (3,3) world-to-camera rotation
     translation: np.ndarray   # (3,) world-to-camera translation
     intrinsics: np.ndarray    # (3,3) camera intrinsic matrix
+    coordinate_frame: CoordinateFrame = CoordinateFrame.SFM
+
+    @property
+    def camera_center(self) -> np.ndarray:
+        """Physical camera center in world coordinates: C = -R^T @ t."""
+        return -self.rotation.T @ self.translation
 
 
 @dataclass
@@ -37,6 +45,7 @@ class GeometryEstimate:
     points_confidence: np.ndarray | None  # (N,) per-point confidence/observation count
     backend_name: str
     is_metric_scale: bool          # False until Scale+Geo Alignment (Phase 3) runs
+    coordinate_frame: CoordinateFrame = CoordinateFrame.SFM
 
 
 class GeometryBackend(Protocol):

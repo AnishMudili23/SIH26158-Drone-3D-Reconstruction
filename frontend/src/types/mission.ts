@@ -60,9 +60,12 @@ export interface DeliverableFile {
 export interface MissionSummary {
   id: string;
   name: string;
+  category?: "MY_MISSIONS" | "DEMO_MISSIONS";
+  is_demo?: boolean;
+  mission_type?: string;
   has_deliverables: boolean;
   has_viewer_data: boolean;
-  status: "COMPLETED" | "IN_PROGRESS";
+  status: "COMPLETED" | "IN_PROGRESS" | "ARCHIVED" | "READY";
   total_frames?: number;
   registered_frames?: number;
   registration_rate_pct?: number;
@@ -110,3 +113,17 @@ export interface MissionDetail {
   };
   deliverables: DeliverableFile[];
 }
+
+export interface TrajectoryPoint {
+  frame: string;
+  lat: number;
+  lon: number;
+  alt: number;
+}
+
+export interface MissionTrajectory {
+  origin?: { lat: number; lon: number; alt: number };
+  n_frames?: number;
+  trajectory: TrajectoryPoint[];
+}
+

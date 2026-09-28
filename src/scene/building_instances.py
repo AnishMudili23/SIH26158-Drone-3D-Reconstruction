@@ -25,9 +25,15 @@ class BuildingInstance:
     mean_confidence: float
     bounding_box_min: tuple[float, float, float]
     bounding_box_max: tuple[float, float, float]
+    roof_elevation_m: float = 0.0
+    ground_elevation_m: float = 0.0
+    max_height_m: float = 0.0
+    mean_height_m: float = 0.0
+    confidence: float = 0.90
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        return d
 
 
 class BuildingInstanceExtractor:
@@ -84,6 +90,7 @@ class BuildingInstanceExtractor:
             z_vals = pts[:, 2]
             base_z = float(np.percentile(z_vals, 5))
             peak_z = float(np.percentile(z_vals, 95))
+            max_height = float(max(0.1, np.max(z_vals) - base_z))
             height = float(max(0.1, peak_z - base_z))
 
             # Footprint area via 2D Convex Hull
@@ -100,8 +107,13 @@ class BuildingInstanceExtractor:
                 dy = max(0.5, bb_max[1] - bb_min[1])
                 footprint_area = float(dx * dy)
 
-            # Volumetric estimate: footprint area * height * prism fill factor (0.85 accounts for pitched roof / facets)
-            volume = float(footprint_area * height * 0.85)
+            # Volumetric integration: footprint area * mean integrated roof-to-ground height
+            upper_roof_pts = z_vals[z_vals >= np.median(z_vals)]
+            mean_roof_z = float(np.mean(upper_roof_pts)) if len(upper_roof_pts) > 0 else peak_z
+            mean_height = float(max(0.1, mean_roof_z - base_z))
+            integrated_vol = float(footprint_area * mean_height)
+
+            mean_conf = round(float(np.mean(confs)), 3)
 
             instances.append(
                 BuildingInstance(
@@ -111,11 +123,16 @@ class BuildingInstanceExtractor:
                     base_elevation_m=round(base_z, 2),
                     peak_elevation_m=round(peak_z, 2),
                     height_m=round(height, 2),
-                    volume_m3=round(volume, 2),
+                    volume_m3=round(integrated_vol, 2),
                     point_count=n_pts,
-                    mean_confidence=round(float(np.mean(confs)), 3),
+                    mean_confidence=mean_conf,
                     bounding_box_min=bb_min,
                     bounding_box_max=bb_max,
+                    roof_elevation_m=round(peak_z, 2),
+                    ground_elevation_m=round(base_z, 2),
+                    max_height_m=round(max_height, 2),
+                    mean_height_m=round(mean_height, 2),
+                    confidence=mean_conf,
                 )
             )
 

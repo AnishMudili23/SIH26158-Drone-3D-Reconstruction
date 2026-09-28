@@ -21,6 +21,14 @@ import pyproj
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from common.alignment import umeyama_alignment  # noqa: E402
+from common.coordinate_frames import (  # noqa: E402
+    CoordinateFrame,
+    SimilarityTransform,
+    CameraTrajectoryENU,
+    wgs84_to_enu as cf_wgs84_to_enu,
+    enu_to_wgs84 as cf_enu_to_wgs84,
+    enu_rotation_matrix as cf_enu_rotation_matrix,
+)
 from common.geometry_interface import CameraPose, GeometryEstimate  # noqa: E402
 
 
@@ -36,34 +44,78 @@ class GpsFix:
 class GeoAlignedResult:
     points_enu: np.ndarray          # (N, 3) metric ENU meters
     camera_centers_enu: np.ndarray  # (M, 3) metric ENU meters
-    aligned_poses: list[CameraPose]  # gravity-aligned extrinsics, world input in meters
+    aligned_poses: list[CameraPose]  # gravity-aligned extrinsics, world input in meters, R orthonormal
     scale_factor: float             # SfM-units -> meters
     origin_lat: float
     origin_lon: float
     origin_alt_m: float
     n_gps_correspondences: int
     mean_alignment_residual_m: float
+    transform: SimilarityTransform = None  # Canonical similarity transform mapping SFM -> ENU
+    coordinate_frame: CoordinateFrame = CoordinateFrame.ENU
+    camera_trajectory: list[CameraTrajectoryENU] | None = None
+
+    def __post_init__(self):
+        if self.transform is None and self.scale_factor is not None:
+            self.transform = SimilarityTransform(
+                scale=self.scale_factor,
+                rotation=np.eye(3),
+                translation=np.zeros(3),
+            )
+
+
+def rederive_aligned_camera(
+    pose: CameraPose, transform: SimilarityTransform
+) -> tuple[CameraPose, CameraTrajectoryENU]:
+    """Computes the orthonormal camera pose and ENU trajectory in the aligned frame.
+
+    COLMAP world-to-cam: x_cam = R_sfm @ X_sfm + t_sfm, center C_sfm = -R_sfm.T @ t_sfm.
+    Similarity transform: X_enu = s * R_sim @ X_sfm + t_sim.
+
+    1. Camera center in ENU meters:
+       C_enu = transform.transform_camera_center(C_sfm)
+
+    2. World-to-camera rotation in ENU (strictly orthonormal):
+       R_enu_to_cam = pose.rotation @ transform.rotation.T
+
+    3. Metric world-to-camera translation:
+       t_enu_to_cam = -R_enu_to_cam @ C_enu
+
+    Guarantees:
+    - R_enu_to_cam is strictly orthonormal (det(R) == 1, R @ R.T == I)
+    - Camera center is -R.T @ t == C_enu (exact)
+    - Pinhole pixel projection matches SfM geometry without distortion
+    - Clean separation between CameraPose and CameraTrajectoryENU
+    """
+    c_sfm = -pose.rotation.T @ pose.translation
+    c_enu = transform.transform_camera_center(c_sfm)
+    r_enu_to_cam = pose.rotation @ transform.rotation.T
+    t_enu_to_cam = -r_enu_to_cam @ c_enu
+
+    aligned_pose = CameraPose(
+        frame_path=pose.frame_path,
+        rotation=r_enu_to_cam,
+        translation=t_enu_to_cam,
+        intrinsics=pose.intrinsics,
+        coordinate_frame=CoordinateFrame.ENU,
+    )
+    trajectory_enu = CameraTrajectoryENU(
+        frame_path=pose.frame_path,
+        center_enu=c_enu,
+        rotation=r_enu_to_cam,
+        intrinsics=pose.intrinsics,
+        coordinate_frame=CoordinateFrame.ENU,
+    )
+    return aligned_pose, trajectory_enu
 
 
 def _rederive_pose_for_aligned_world(
     pose: CameraPose, scale: float, rotation: np.ndarray, translation: np.ndarray
 ) -> CameraPose:
-    """Re-expresses a camera's extrinsic so it projects points given in the ALIGNED
-    (real-world-meters) frame, instead of COLMAP's original arbitrary-scale frame.
-
-    Derivation: alignment maps X_aligned = scale*rotation @ X_orig + translation, so
-    X_orig = rotation^T @ (X_aligned - translation) / scale. Substituting into the
-    camera's original equation x_cam = R@X_orig + t gives
-    R_new = R @ rotation^T / scale,  t_new = t - R_new @ translation.
-    x_cam's own units/meaning are unchanged (still whatever COLMAP originally used) —
-    only the input world-point's units changed from arbitrary-scale to real meters —
-    and standard pinhole projection (pixel = K @ (x_cam / x_cam.z)) is invariant to any
-    uniform positive scaling of x_cam, so this is safe to use for projection/homography
-    purposes even though R_new is no longer a strictly orthonormal rotation matrix.
-    """
-    r_new = pose.rotation @ rotation.T / scale
-    t_new = pose.translation - r_new @ translation
-    return CameraPose(frame_path=pose.frame_path, rotation=r_new, translation=t_new, intrinsics=pose.intrinsics)
+    """Backward-compatible wrapper returning strictly orthonormal CameraPose."""
+    tf = SimilarityTransform(scale=scale, rotation=rotation, translation=translation)
+    aligned_pose, _ = rederive_aligned_camera(pose, tf)
+    return aligned_pose
 
 
 _ECEF_FROM_GPS = pyproj.Transformer.from_crs("EPSG:4979", "EPSG:4978", always_xy=True)
@@ -148,14 +200,18 @@ def align_geometry_to_gps(geometry: GeometryEstimate, gps_fixes: list[GpsFix]) -
     gps_enu, origin_lat, origin_lon, origin_alt = gps_fixes_to_enu(matched_fixes)
 
     scale, rotation, translation = umeyama_alignment(sfm_centers, gps_enu)
+    transform = SimilarityTransform(scale=scale, rotation=rotation, translation=translation)
 
-    aligned_centers = (scale * rotation @ sfm_centers.T).T + translation
+    aligned_centers = transform.transform_points(sfm_centers)
     residuals = np.linalg.norm(aligned_centers - gps_enu, axis=1)
 
-    aligned_points = (scale * rotation @ geometry.points_xyz.T).T + translation
-    aligned_poses = [
-        _rederive_pose_for_aligned_world(pose, scale, rotation, translation) for pose in matched_poses
-    ]
+    aligned_points = transform.transform_points(geometry.points_xyz)
+    aligned_poses: list[CameraPose] = []
+    camera_trajectories: list[CameraTrajectoryENU] = []
+    for pose in matched_poses:
+        ap, ct = rederive_aligned_camera(pose, transform)
+        aligned_poses.append(ap)
+        camera_trajectories.append(ct)
 
     return GeoAlignedResult(
         points_enu=aligned_points,
@@ -167,4 +223,7 @@ def align_geometry_to_gps(geometry: GeometryEstimate, gps_fixes: list[GpsFix]) -
         origin_alt_m=origin_alt,
         n_gps_correspondences=len(matched_sfm_centers),
         mean_alignment_residual_m=float(residuals.mean()),
+        transform=transform,
+        coordinate_frame=CoordinateFrame.ENU,
+        camera_trajectory=camera_trajectories,
     )

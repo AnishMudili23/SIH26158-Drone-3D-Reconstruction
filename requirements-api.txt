@@ -6,3 +6,4 @@
 # runtimes (including Render's non-Docker services) don't have preinstalled.
 fastapi==0.141.1
 uvicorn[standard]==0.53.0
+python-multipart>=0.0.9

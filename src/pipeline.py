@@ -29,6 +29,13 @@ from reconstruction.colmap_backend import (
     _quat_to_rotmat,
     _camera_intrinsics,
 )
+from common.coordinate_frames import (
+    CoordinateFrame,
+    SimilarityTransform,
+    CameraTrajectoryENU,
+    wgs84_to_enu,
+    enu_to_wgs84,
+)
 from pointcloud.outlier_removal import remove_statistical_outliers
 from geo.scale_alignment import (
     GpsFix,
@@ -37,6 +44,7 @@ from geo.scale_alignment import (
     gps_fixes_to_enu,
     lla_to_enu,
 )
+from geo.adaptive_georeferencing import AdaptiveGeoreferencer, GeoreferencingMode
 from reconstruction.geo_constrained_ba import refine_poses_with_gps_priors
 from exports.texture_mapper import CameraView, UVTextureMapper
 from exports.class_tagging import tag_points_by_class, tags_to_class_names
@@ -317,51 +325,48 @@ def run_pipeline(
             gps_fixes.append(GpsFix(name, lat, lon, alt))
         telemetry_provenance = "SIMULATED"
 
-    has_geo = len(gps_fixes) >= 3
-    if has_geo:
-        align_result = align_geometry_to_gps(clean_geom, gps_fixes)
-        print(f"  Alignment: Scale factor = {align_result.scale_factor:.4f}")
-        print(f"  Mean GPS residual = {align_result.mean_alignment_residual_m:.3f} m")
-    else:
-        # Phase A provenance rule: no real/opted-in GPS -> LOCAL_METRIC mode. Points
-        # stay in COLMAP's own arbitrary-scale frame; no coordinate is invented.
-        print("  [LOCAL_METRIC MODE] No real GPS available (and allow_simulated_gps=False) — "
-              "georeferencing skipped. Output points remain in an arbitrary, ungeoreferenced "
-              "SfM-scale frame. Pass --telemetry, --gps-log, or --allow-simulated-gps to georeference.")
-        from types import SimpleNamespace
-        align_result = SimpleNamespace(
-            points_enu=clean_points,
-            aligned_poses=poses,
-            scale_factor=None,
-            origin_lat=None,
-            origin_lon=None,
-            origin_alt_m=None,
-            n_gps_correspondences=0,
-            mean_alignment_residual_m=None,
-        )
-
     # ---------------------------------------------------------
-    # Stage 5.4 — Sensor Quality Assessment & Adaptive Prior Policy
+    # Stage 5.3 — Sensor Quality Assessment & Policy Gate (Pre-Alignment)
     # ---------------------------------------------------------
     sq_evaluator = SensorQualityEvaluator()
     sensor_quality_rep = None
-    if has_geo and gps_fixes:
-        gps_enu_list = []
-        for gf in gps_fixes:
-            e, n, u = lla_to_enu(gf.lat, gf.lon, gf.alt_m, align_result.origin_lat, align_result.origin_lon, align_result.origin_alt_m)
-            gps_enu_list.append([e, n, u])
+    if len(gps_fixes) >= 2:
+        gps_enu_raw, lat0, lon0, alt0 = gps_fixes_to_enu(gps_fixes)
         sensor_quality_rep = sq_evaluator.evaluate_trajectory(
-            np.array(gps_enu_list),
+            gps_enu_raw,
             has_imu=bool(session and session.imu_measurements),
             has_barometer=bool(session and session.barometer_measurements),
         )
     else:
-        sensor_quality_rep = sq_evaluator.evaluate_trajectory(None)
+        sensor_quality_rep = sq_evaluator.evaluate_trajectory(
+            None,
+            has_imu=bool(session and session.imu_measurements),
+            has_barometer=bool(session and session.barometer_measurements),
+        )
 
-    print("\n[Stage 5.4] Sensor Quality Assessment:")
+    print("\n[Stage 5.3] Sensor Quality Assessment (Pre-Alignment Gate):")
     print(f"  Quality Tier: {sensor_quality_rep.quality_tier.value} | BNR: {sensor_quality_rep.baseline_to_noise_ratio:.2f}")
     print(f"  Recommended Mode: {sensor_quality_rep.recommended_mode} | Dynamic GPS Weight: {sensor_quality_rep.recommended_gps_weight:.4f}")
     print(f"  Summary: {sensor_quality_rep.summary}")
+
+    # ---------------------------------------------------------
+    # Stage 5.4 — Adaptive Georeferencing & Robust Alignment
+    # ---------------------------------------------------------
+    georeferencer = AdaptiveGeoreferencer()
+    align_result = georeferencer.estimate(
+        clean_geom,
+        gps_fixes,
+        sensor_quality=sensor_quality_rep,
+        has_imu=bool(session and session.imu_measurements),
+        has_barometer=bool(session and session.barometer_measurements),
+    )
+    has_geo = (align_result.coordinate_frame == CoordinateFrame.ENU and align_result.origin_lat is not None)
+    if has_geo:
+        print(f"  [Stage 5.4] Alignment: Scale factor = {align_result.scale_factor:.4f}")
+        print(f"  Mean GPS residual = {align_result.mean_alignment_residual_m:.3f} m")
+    else:
+        print("  [Stage 5.4] [LOCAL_METRIC MODE] Georeferencing skipped or constrained. "
+              "Output remains in a metric/unscaled local coordinate frame.")
 
     # ---------------------------------------------------------
     # Stage 5.5 [optional] — Phase C: Geo-Constrained Pose Refinement
@@ -615,9 +620,12 @@ def run_pipeline(
     else:
         print("  [LOCAL_METRIC MODE] Skipping CesiumJS viewer bundle (requires real lat/lon).")
 
-    # 6. Scaled 3D Mesh Export (scale factor applied only when georeferenced; otherwise
-    # the mesh stays in COLMAP's own arbitrary units, clearly not real-world meters)
-    mesh_scale = float(align_result.scale_factor) if has_geo else 1.0
+    # 6. Canonical Georeferenced 3D Mesh Export
+    sim_transform = (
+        align_result.transform
+        if hasattr(align_result, "transform") and align_result.transform is not None
+        else SimilarityTransform.identity()
+    )
     dense_mesh_path = reconstruction_dir / "dense" / "meshed-poisson.ply"
     mesh = None
     try:
@@ -633,7 +641,8 @@ def run_pipeline(
             mesh, _ = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pcd, depth=8)
 
         if mesh is not None and len(mesh.vertices) > 0:
-            verts = np.asarray(mesh.vertices) * mesh_scale
+            raw_verts = np.asarray(mesh.vertices)
+            verts = sim_transform.transform_points(raw_verts)
             mesh.vertices = o3d.utility.Vector3dVector(verts)
             mesh.compute_vertex_normals()
             glb_out = viewer_dir / "mesh_scaled.glb"
@@ -641,7 +650,7 @@ def run_pipeline(
             shutil.copy(str(glb_out), deliverables_dir / "mesh_textured.glb")
             ply_out = deliverables_dir / "mesh_textured.ply"
             o3d.io.write_triangle_mesh(str(ply_out), mesh)
-            print(f"  [Deliverable] Scaled 3D Mesh: {deliverables_dir / 'mesh_textured.glb'}")
+            print(f"  [Deliverable] Georeferenced 3D Mesh: {deliverables_dir / 'mesh_textured.glb'}")
 
             # 6b. [optional] Phase F: real multi-view UV texture bake, as a
             # separate file — the vertex-colored export above is already the
@@ -654,7 +663,8 @@ def run_pipeline(
                         sample_img = cv2.imread(str(img_candidates[0]))
                         img_h, img_w = sample_img.shape[:2]
                         cam_views = []
-                        for i, pose in enumerate(poses):
+                        active_poses = align_result.aligned_poses if has_geo else poses
+                        for i, pose in enumerate(active_poses):
                             img_path = image_folder / Path(pose.frame_path).name
                             if not img_path.exists():
                                 continue
@@ -662,7 +672,7 @@ def run_pipeline(
                                 camera_idx=i,
                                 image_path=img_path,
                                 rotation=pose.rotation,
-                                translation=pose.translation * mesh_scale,
+                                translation=pose.translation,
                                 intrinsics=pose.intrinsics,
                                 width=img_w,
                                 height=img_h,
