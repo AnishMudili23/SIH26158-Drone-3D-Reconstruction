@@ -101,7 +101,7 @@ export const CesiumViewport: React.FC<CesiumViewportProps> = ({
 
   const datasetPath = missionId ? `/static/outputs/${missionId}/viewer_data` : "";
   const viewerUrl =
-    `${API_BASE}/viewer/cesium_viewer.html?embed=1&mode=${colorMode}` +
+    `${API_BASE}/viewer/cesium_viewer.html?v=2.0.1&embed=1&mode=${colorMode}` +
     `&cutoff=${confidenceThreshold}` +
     (datasetPath ? `&dataset=${encodeURIComponent(datasetPath)}` : "");
 
