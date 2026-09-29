@@ -10,8 +10,6 @@ import { FlightTimeline } from "@/components/FlightTimeline";
 import { MissionCreatorModal } from "@/components/MissionCreatorModal";
 import { LandingHome } from "@/components/LandingHome";
 import { PipelineWorkflowBar } from "@/components/PipelineWorkflowBar";
-import { MeasurementToolbar } from "@/components/MeasurementToolbar";
-import { AeroMeshGuide } from "@/components/AeroMeshGuide";
 import { MissionSummaryModal } from "@/components/MissionSummaryModal";
 import { CompareModeModal } from "@/components/CompareModeModal";
 import { SignatureMomentOverlay } from "@/components/SignatureMomentOverlay";
@@ -199,10 +197,11 @@ export default function Home() {
       ) : (
         /* MISSION STUDIO (Hero 3D Screen) */
         <div className="flex-1 flex flex-col overflow-hidden relative">
-          {/* Mission Control Summary & 7-Stage Pipeline Lifecycle */}
+          {/* Mission Subheader: Title, Building Inspection, Ready badge, ⋯ menu */}
           <PipelineWorkflowBar
             mission={selectedMission}
             detail={detail}
+            onOpenOverview={() => setIsSummaryOpen(true)}
             onOpenEvidence={() => setIsEvidenceCenterOpen(true)}
             onOpenMeasurements={() => {
               setViewMode("studio");
@@ -228,7 +227,7 @@ export default function Home() {
               </div>
             )}
 
-            {/* Left Panel: Mission Health, Simple Layer Switcher & Deliverables */}
+            {/* Left Panel: Overview & Layers */}
             <MissionSidebar
               mission={selectedMission}
               detail={detail}
@@ -251,15 +250,10 @@ export default function Home() {
               onChangeColorMode={setColorMode}
               confidenceThreshold={confidenceThreshold}
               onChangeConfidenceThreshold={setConfidenceThreshold}
-              onOpenExport3D={() => setIsExport3DOpen(true)}
-              onFocus3DModel={() => setSelectedBuildingId(1)}
             />
 
-            {/* Center Hero: Cesium 3D Viewer with 3D | MAP | SPLIT and Measurement Tools */}
+            {/* Center Hero: Cesium 3D Viewer with Contextual Controls */}
             <div className="flex-1 relative h-full flex flex-col overflow-hidden">
-              {/* Interactive Measurement Toolbar */}
-              <MeasurementToolbar activeBuilding={activeBuilding} />
-
               <CesiumViewport
                 missionId={selectedMissionId}
                 colorMode={colorMode}
@@ -273,16 +267,18 @@ export default function Home() {
                 buildings={buildings}
               />
 
-              {/* Minimal AeroMesh Guide Badge */}
-              <AeroMeshGuide
-                onReviewStructure={() => {
-                  setSelectedBuildingId(1);
-                  setInspectorMode("world");
-                }}
+              {/* Floating Collapsible Flight Replay Drawer at Bottom */}
+              <FlightTimeline
+                totalFrames={totalFrames}
+                trajectory={trajectory}
+                mission={selectedMission}
+                detail={detail}
+                currentFrame={currentFrame}
+                onFrameChange={setCurrentFrame}
               />
             </div>
 
-            {/* Right Panel: Human-Readable AI Analysis & Defensible Evidence */}
+            {/* Right Panel: AEROMESH FINDINGS Intelligence Panel */}
             <StructureInspector
               buildings={buildings}
               detail={detail}
@@ -290,21 +286,12 @@ export default function Home() {
               selectedBuildingId={selectedBuildingId}
               onFocusBuilding={(b) => setSelectedBuildingId(b.instance_id)}
               onJumpToFrame={setCurrentFrame}
-              activeMode={inspectorMode}
-              onModeChange={setInspectorMode}
+              onOpenEvidenceCenter={(bldgId) => {
+                setIsEvidenceCenterOpen(true);
+              }}
               onOpenStructureDetail={(bldg) => setSelectedStructureForDetail(bldg)}
             />
           </div>
-
-          {/* Bottom Flight Timeline & Sensor Replay Scrubber */}
-          <FlightTimeline
-            totalFrames={totalFrames}
-            trajectory={trajectory}
-            mission={selectedMission}
-            detail={detail}
-            currentFrame={currentFrame}
-            onFrameChange={setCurrentFrame}
-          />
         </div>
       )}
 

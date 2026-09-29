@@ -222,7 +222,7 @@ export const Header: React.FC<HeaderProps> = ({
             title="Start a new mission"
           >
             <Plus className="w-3.5 h-3.5" />
-            <span>+ New Mission</span>
+            <span>+ New</span>
           </button>
         )}
 

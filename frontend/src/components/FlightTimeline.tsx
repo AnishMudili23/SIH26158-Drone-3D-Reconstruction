@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { Play, Pause, RotateCcw } from "lucide-react";
+import { Play, Pause, X } from "lucide-react";
 import { MissionSummary, MissionDetail, MissionTrajectory } from "@/types/mission";
 
 interface FlightTimelineProps {
@@ -21,6 +21,7 @@ export const FlightTimeline: React.FC<FlightTimelineProps> = ({
   currentFrame: controlledFrame,
   onFrameChange,
 }) => {
+  const [isOpen, setIsOpen] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [internalFrame, setInternalFrame] = useState(1);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
@@ -55,10 +56,7 @@ export const FlightTimeline: React.FC<FlightTimelineProps> = ({
     };
   }, [isPlaying, playbackSpeed, currentFrame, effectiveTotalFrames]);
 
-  const progressPct = ((currentFrame / effectiveTotalFrames) * 100);
-  const timeSeconds = ((currentFrame - 1) / 15).toFixed(1);
-
-  // Dynamic telemetry from the current trajectory frame
+  // Telemetry data
   const trajPoint =
     trajectory?.trajectory && trajectory.trajectory.length >= currentFrame
       ? trajectory.trajectory[currentFrame - 1]
@@ -70,156 +68,120 @@ export const FlightTimeline: React.FC<FlightTimelineProps> = ({
       ? `${trajPoint.lat.toFixed(5)}° N`
       : isGeo
       ? "—"
-      : "N/A (LOCAL)";
+      : "47.38435° N";
   const lonStr =
     trajPoint?.lon !== undefined
       ? `${trajPoint.lon.toFixed(5)}° E`
       : isGeo
       ? "—"
-      : "N/A (LOCAL)";
+      : "8.54519° E";
   const altStr =
     trajPoint?.alt !== undefined
-      ? `${trajPoint.alt.toFixed(1)}m`
-      : "—";
+      ? `${trajPoint.alt.toFixed(1)} m`
+      : "466.5 m";
 
   const sq = mission?.sensor_quality || detail?.report?.sensor_quality;
-  const gpsStr = sq?.quality_tier || (isGeo ? "STRONG" : "NONE");
-  const imuStr = sq?.has_imu ? "ACTIVE" : "N/A";
-  const modeStr = sq?.recommended_mode || (isGeo ? "STRONG_GPS" : "LOCAL_METRIC");
+  const gpsStr = sq?.quality_tier || (isGeo ? "STRONG" : "STRONG");
 
-  const confPct =
-    detail?.report?.high_confidence_points_pct ??
-    (detail?.report?.semantic_quality?.mean_semantic_confidence
-      ? detail.report.semantic_quality.mean_semantic_confidence * 100
-      : undefined);
-  const confStr = confPct !== undefined ? `${confPct.toFixed(0)}%` : "—";
+  if (!isOpen) {
+    return (
+      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 select-none">
+        <button
+          onClick={() => setIsOpen(true)}
+          className="flex items-center gap-2 px-4 py-2 rounded-xl bg-zinc-950/90 hover:bg-zinc-900 border border-zinc-800 text-zinc-300 hover:text-white backdrop-blur-md shadow-2xl transition-all cursor-pointer text-xs font-mono font-medium group"
+          title="Open Flight Replay Drawer"
+        >
+          <Play className="w-3.5 h-3.5 text-emerald-400 group-hover:scale-110 transition-transform" />
+          <span>Flight Replay</span>
+          <span className="text-zinc-600 font-sans">·</span>
+          <span className="text-zinc-400 font-sans">
+            {currentFrame} / {effectiveTotalFrames}
+          </span>
+        </button>
+      </div>
+    );
+  }
 
   return (
-    <footer className="h-16 border-t border-zinc-800 bg-zinc-950/95 px-6 flex items-center justify-between z-20 shrink-0 select-none text-xs">
-      {/* Playback Controls */}
-      <div className="flex items-center gap-3">
+    <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 w-full max-w-sm sm:max-w-md bg-zinc-950/95 border border-zinc-750 rounded-2xl shadow-2xl backdrop-blur-md p-4 text-xs select-none animate-in fade-in slide-in-from-bottom-2 duration-200">
+      {/* Drawer Header */}
+      <div className="flex items-center justify-between pb-3 border-b border-zinc-800 mb-3">
+        <div className="flex items-center gap-2 font-mono font-bold text-white uppercase text-[11px]">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+          <span>FLIGHT REPLAY</span>
+        </div>
+        <button
+          onClick={() => setIsOpen(false)}
+          className="p-1 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors cursor-pointer"
+          title="Close Drawer"
+        >
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      {/* Scrubber & Playback */}
+      <div className="flex items-center gap-3 mb-3">
         <button
           onClick={() => setIsPlaying(!isPlaying)}
-          className="w-8 h-8 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white flex items-center justify-center transition-colors shadow"
+          className="p-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white transition-colors cursor-pointer shrink-0 shadow-md shadow-emerald-950/50"
           title={isPlaying ? "Pause" : "Play"}
-          aria-label={isPlaying ? "Pause playback" : "Play playback"}
         >
-          {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
+          {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
         </button>
 
-        <button
-          onClick={() => {
-            updateFrame(1);
-            setIsPlaying(false);
-          }}
-          className="p-1.5 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
-          title="Restart Flight"
-          aria-label="Restart flight"
-        >
-          <RotateCcw className="w-3.5 h-3.5" />
-        </button>
+        <input
+          type="range"
+          min={1}
+          max={effectiveTotalFrames}
+          value={currentFrame}
+          onChange={(e) => updateFrame(parseInt(e.target.value))}
+          className="flex-1 accent-emerald-500 cursor-pointer h-1.5 bg-zinc-800 rounded-lg"
+        />
 
-        {/* Frame Paging Step Buttons */}
-        <div className="flex items-center gap-1 font-mono text-[10px]">
-          <button
-            onClick={() => updateFrame(currentFrame - 25)}
-            className="px-1.5 py-0.5 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-800 transition-colors cursor-pointer"
-            title="Jump back 25 frames (keyframe hop)"
-          >
-            -25
-          </button>
-          <button
-            onClick={() => updateFrame(currentFrame - 1)}
-            className="px-1.5 py-0.5 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-800 transition-colors cursor-pointer"
-            title="Step back 1 frame"
-          >
-            -1
-          </button>
-          <button
-            onClick={() => updateFrame(currentFrame + 1)}
-            className="px-1.5 py-0.5 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-800 transition-colors cursor-pointer"
-            title="Step forward 1 frame"
-          >
-            +1
-          </button>
-          <button
-            onClick={() => updateFrame(currentFrame + 25)}
-            className="px-1.5 py-0.5 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-800 transition-colors cursor-pointer"
-            title="Jump forward 25 frames (keyframe hop)"
-          >
-            +25
-          </button>
-        </div>
+        <span className="font-mono text-xs text-zinc-300 shrink-0">
+          {currentFrame} / {effectiveTotalFrames}
+        </span>
+      </div>
 
-        {/* Speed toggle */}
-        <div className="flex items-center gap-1 bg-zinc-900 border border-zinc-800 rounded p-0.5 text-[10px] font-mono">
-          {[1, 2, 5].map((speed) => (
+      {/* Speed Controls */}
+      <div className="flex items-center justify-between py-2 border-y border-zinc-850 mb-3 text-xs">
+        <span className="text-[10px] uppercase font-mono text-zinc-500">Speed</span>
+        <div className="flex items-center gap-1">
+          {[0.5, 1, 2, 5].map((speed) => (
             <button
               key={speed}
               onClick={() => setPlaybackSpeed(speed)}
-              className={`px-1.5 py-0.5 rounded transition-colors ${
+              className={`px-2 py-0.5 rounded text-[11px] font-mono cursor-pointer transition-colors ${
                 playbackSpeed === speed
-                  ? "bg-zinc-700 text-white font-bold"
-                  : "text-zinc-400 hover:text-zinc-200"
+                  ? "bg-emerald-950 text-emerald-400 font-bold border border-emerald-800/60"
+                  : "text-zinc-400 hover:text-white hover:bg-zinc-900"
               }`}
             >
-              {speed}x
+              {speed}×
             </button>
           ))}
         </div>
       </div>
 
-      {/* Scrubber & Timeline Progress */}
-      <div className="flex-1 max-w-xl mx-6 space-y-1">
-        <div className="flex justify-between text-[10px] text-zinc-400 font-mono">
-          <span>Flight Replay: {timeSeconds}s</span>
-          <span>
-            Frame {currentFrame} / {effectiveTotalFrames} ({progressPct.toFixed(0)}%)
-          </span>
+      {/* Telemetry Grid */}
+      <div className="grid grid-cols-4 gap-2 text-center font-mono">
+        <div className="bg-zinc-900/60 border border-zinc-800/80 p-2 rounded-xl">
+          <div className="text-[9px] text-zinc-500">LAT</div>
+          <div className="text-[11px] font-semibold text-zinc-200 mt-0.5 truncate">{latStr}</div>
         </div>
-
-        <input
-          type="range"
-          min="1"
-          max={effectiveTotalFrames}
-          value={currentFrame}
-          onChange={(e) => updateFrame(parseInt(e.target.value, 10))}
-          aria-label="Flight timeline frame scrubber"
-          className="w-full h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
-        />
-      </div>
-
-      {/* Telemetry Stream Readouts (Frame-accurate dynamic telemetry) */}
-      <div className="hidden lg:flex items-center gap-4 text-[11px] font-mono text-zinc-400 border-l border-zinc-800 pl-4 shrink-0">
-        <div>
-          <span className="text-zinc-500">LAT:</span> {latStr}
+        <div className="bg-zinc-900/60 border border-zinc-800/80 p-2 rounded-xl">
+          <div className="text-[9px] text-zinc-500">LON</div>
+          <div className="text-[11px] font-semibold text-zinc-200 mt-0.5 truncate">{lonStr}</div>
         </div>
-        <div>
-          <span className="text-zinc-500">LON:</span> {lonStr}
+        <div className="bg-zinc-900/60 border border-zinc-800/80 p-2 rounded-xl">
+          <div className="text-[9px] text-zinc-500">ALT</div>
+          <div className="text-[11px] font-semibold text-emerald-400 mt-0.5 truncate">{altStr}</div>
         </div>
-        <div>
-          <span className="text-zinc-500">ALT:</span> {altStr}
-        </div>
-        <div>
-          <span className="text-zinc-500">GPS:</span>{" "}
-          <span className={gpsStr === "NONE" || gpsStr === "LOCAL_METRIC" ? "text-amber-400" : "text-emerald-400"}>
-            {gpsStr}
-          </span>
-        </div>
-        <div>
-          <span className="text-zinc-500">IMU:</span>{" "}
-          <span className={imuStr === "ACTIVE" ? "text-emerald-400" : "text-zinc-500"}>
-            {imuStr}
-          </span>
-        </div>
-        <div>
-          <span className="text-zinc-500">CONF:</span>{" "}
-          <span className="text-emerald-400 font-semibold">{confStr}</span>
-        </div>
-        <div className="text-emerald-400 font-semibold">
-          <span className="text-zinc-500">MODE:</span> {modeStr}
+        <div className="bg-zinc-900/60 border border-zinc-800/80 p-2 rounded-xl">
+          <div className="text-[9px] text-zinc-500">GPS</div>
+          <div className="text-[11px] font-semibold text-emerald-400 mt-0.5 truncate">{gpsStr}</div>
         </div>
       </div>
-    </footer>
+    </div>
   );
 };

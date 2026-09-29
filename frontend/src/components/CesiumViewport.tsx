@@ -1,29 +1,34 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
+  Box,
+  Map as MapIcon,
+  Columns,
   Compass,
   Video,
   Maximize2,
   Minimize2,
-  RefreshCcw,
-  Eye,
+  X,
   WifiOff,
-  Map as MapIcon,
-  Columns,
-  Box,
+  Ruler,
+  ArrowUpDown,
+  Square,
+  MapPin,
+  ChevronUp,
+  Check,
 } from "lucide-react";
-import { GisMapCanvas } from "./GisMapCanvas";
-import { BuildingInstance, MissionTrajectory } from "@/types/mission";
+import { GisMapCanvas } from "@/components/GisMapCanvas";
+import { MissionTrajectory, BuildingInstance } from "@/types/mission";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
 interface CesiumViewportProps {
-  missionId: string;
+  missionId?: string;
   colorMode: "semantic" | "uncertainty";
   confidenceThreshold: number;
   selectedBuildingId?: number | null;
-  onBuildingSelected?: (instanceId: number) => void;
+  onBuildingSelected?: (id: number | null) => void;
   currentFrame?: number;
   totalFrames?: number;
   onFrameChange?: (frame: number) => void;
@@ -39,42 +44,44 @@ export const CesiumViewport: React.FC<CesiumViewportProps> = ({
   onBuildingSelected,
   currentFrame = 1,
   totalFrames = 350,
-  onFrameChange,
-  trajectory = null,
+  trajectory,
   buildings = [],
 }) => {
   const [viewportMode, setViewportMode] = useState<"3D" | "MAP" | "SPLIT">("3D");
-  const [videoOpen, setVideoOpen] = useState(true);
-  const [videoMinimized, setVideoMinimized] = useState(false);
-  const [backendReachable, setBackendReachable] = useState<boolean | null>(null);
+  const [videoOpen, setVideoOpen] = useState(false);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [backendReachable, setBackendReachable] = useState<boolean | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // Measurement State
+  const [measureMenuOpen, setMeasureMenuOpen] = useState(false);
+  const [activeTool, setActiveTool] = useState<
+    "distance" | "height" | "area" | "volume" | "coordinate" | null
+  >(null);
+  const [measureStep, setMeasureStep] = useState(0);
+
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const measureRef = useRef<HTMLDivElement>(null);
 
+  // Fetch onboard video URL if available
   useEffect(() => {
-    setVideoUrl(null);
-    if (!missionId) return;
+    if (!missionId) {
+      setVideoUrl(null);
+      return;
+    }
     fetch(`${API_BASE}/api/missions/${missionId}/video`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => setVideoUrl(data ? `${API_BASE}${data.url}` : null))
       .catch(() => setVideoUrl(null));
   }, [missionId]);
 
-  useEffect(() => {
-    const onMessage = (event: MessageEvent) => {
-      const msg = event.data;
-      if (msg && msg.type === "buildingSelected" && typeof msg.instance_id === "number") {
-        onBuildingSelected?.(msg.instance_id);
-      }
-    };
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, [onBuildingSelected]);
-
+  // Synchronize Cesium 3D camera to selected building
   useEffect(() => {
     if (selectedBuildingId == null) return;
     iframeRef.current?.contentWindow?.postMessage(
-      { type: "focusBuilding", instance_id: selectedBuildingId },
+      { type: "focusBuilding", buildingId: selectedBuildingId },
       "*"
     );
   }, [selectedBuildingId]);
@@ -83,13 +90,11 @@ export const CesiumViewport: React.FC<CesiumViewportProps> = ({
   useEffect(() => {
     if (currentFrame == null || !totalFrames || totalFrames <= 1) return;
 
-    // 1. Post scrubFrame message to embedded Cesium viewer
     iframeRef.current?.contentWindow?.postMessage(
       { type: "scrubFrame", frameIndex: currentFrame, totalFrames },
       "*"
     );
 
-    // 2. Synchronize PiP video playback position
     if (videoRef.current && videoRef.current.duration && !isNaN(videoRef.current.duration)) {
       const frac = Math.min(Math.max((currentFrame - 1) / Math.max(totalFrames - 1, 1), 0), 1);
       const targetTime = frac * videoRef.current.duration;
@@ -98,6 +103,19 @@ export const CesiumViewport: React.FC<CesiumViewportProps> = ({
       }
     }
   }, [currentFrame, totalFrames]);
+
+  // Close measure dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (measureRef.current && !measureRef.current.contains(e.target as Node)) {
+        setMeasureMenuOpen(false);
+      }
+    };
+    if (measureMenuOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [measureMenuOpen]);
 
   const datasetPath = missionId ? `/static/outputs/${missionId}/viewer_data` : "";
   const viewerUrl =
@@ -116,15 +134,40 @@ export const CesiumViewport: React.FC<CesiumViewportProps> = ({
     checkBackend();
   }, [checkBackend, missionId]);
 
+  const toggleFullscreen = () => {
+    if (!containerRef.current) return;
+    if (!document.fullscreenElement) {
+      containerRef.current.requestFullscreen?.().then(() => setIsFullscreen(true));
+    } else {
+      document.exitFullscreen?.().then(() => setIsFullscreen(false));
+    }
+  };
+
+  const selectMeasurementTool = (
+    tool: "distance" | "height" | "area" | "volume" | "coordinate"
+  ) => {
+    if (activeTool === tool) {
+      setActiveTool(null);
+      setMeasureStep(0);
+    } else {
+      setActiveTool(tool);
+      setMeasureStep(1);
+    }
+    setMeasureMenuOpen(false);
+  };
+
   return (
-    <div className="flex-1 relative h-full bg-[#05070a] flex flex-col overflow-hidden select-none">
+    <div
+      ref={containerRef}
+      className="flex-1 relative h-full bg-[#05070a] flex flex-col overflow-hidden select-none group/viewport"
+    >
       {/* Viewport Content Area: 3D | MAP | SPLIT */}
       <div className="flex-1 flex overflow-hidden relative">
         {/* Left Side: 3D Scene (visible in 3D and SPLIT) */}
         {(viewportMode === "3D" || viewportMode === "SPLIT") && (
           <div
             className={`h-full relative overflow-hidden transition-all duration-300 ${
-              viewportMode === "SPLIT" ? "w-1/2 border-r border-zinc-800" : "w-full"
+              viewportMode === "SPLIT" ? "w-1/2 border-r border-zinc-850" : "w-full"
             }`}
           >
             {backendReachable === false || !missionId ? (
@@ -169,7 +212,7 @@ export const CesiumViewport: React.FC<CesiumViewportProps> = ({
             }`}
           >
             <GisMapCanvas
-              trajectory={trajectory}
+              trajectory={trajectory || null}
               buildings={buildings}
               currentFrame={currentFrame}
               totalFrames={totalFrames}
@@ -180,121 +223,242 @@ export const CesiumViewport: React.FC<CesiumViewportProps> = ({
         )}
       </div>
 
-      {/* Floating Viewport Toolbar (Top Left) */}
-      <div className="absolute top-4 left-4 z-10 flex items-center gap-2 bg-zinc-950/90 backdrop-blur border border-zinc-750 p-1.5 rounded-xl shadow-2xl text-xs select-none">
-        {/* 3D | MAP | SPLIT Switcher */}
-        <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-zinc-900 border border-zinc-800 font-mono text-[11px]">
+      {/* TOP-RIGHT CONTROLS: Floating Camera & Utility Icons */}
+      <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
+        {/* Onboard Camera Button (Only if video exists, cleanly isolated) */}
+        {videoUrl && (
           <button
-            onClick={() => setViewportMode("3D")}
-            className={`px-2 py-1 rounded-md transition-colors cursor-pointer flex items-center gap-1 ${
-              viewportMode === "3D"
-                ? "bg-emerald-950 text-emerald-400 font-bold border border-emerald-800/60"
-                : "text-zinc-400 hover:text-white"
+            onClick={() => setVideoOpen(!videoOpen)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl backdrop-blur-md border text-xs font-medium transition-all shadow-xl cursor-pointer ${
+              videoOpen
+                ? "bg-emerald-600 text-white border-emerald-500"
+                : "bg-zinc-950/80 hover:bg-zinc-900 border-zinc-800 text-zinc-300 hover:text-white"
             }`}
+            title="Toggle Onboard Flight Camera"
           >
-            <Box className="w-3 h-3" />
-            <span>3D</span>
+            <Video className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Camera</span>
           </button>
-          <button
-            onClick={() => setViewportMode("MAP")}
-            className={`px-2 py-1 rounded-md transition-colors cursor-pointer flex items-center gap-1 ${
-              viewportMode === "MAP"
-                ? "bg-emerald-950 text-emerald-400 font-bold border border-emerald-800/60"
-                : "text-zinc-400 hover:text-white"
-            }`}
-          >
-            <MapIcon className="w-3 h-3" />
-            <span>MAP</span>
-          </button>
-          <button
-            onClick={() => setViewportMode("SPLIT")}
-            className={`px-2 py-1 rounded-md transition-colors cursor-pointer flex items-center gap-1 ${
-              viewportMode === "SPLIT"
-                ? "bg-emerald-950 text-emerald-400 font-bold border border-emerald-800/60"
-                : "text-zinc-400 hover:text-white"
-            }`}
-          >
-            <Columns className="w-3 h-3" />
-            <span>SPLIT</span>
-          </button>
-        </div>
+        )}
 
-        <div className="h-4 w-px bg-zinc-800" />
-
+        {/* Reset View Button */}
         <button
           onClick={() => {
             if (iframeRef.current) iframeRef.current.src = iframeRef.current.src;
           }}
-          className="flex items-center gap-1.5 px-2 py-1 rounded bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 hover:text-white transition-colors cursor-pointer"
+          className="p-2 rounded-xl bg-zinc-950/80 hover:bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white backdrop-blur-md shadow-xl transition-colors cursor-pointer"
           title="Reset Camera Orientation"
         >
-          <Compass className="w-3.5 h-3.5 text-emerald-400" />
-          <span>Reset</span>
+          <Compass className="w-4 h-4 text-zinc-300" />
         </button>
 
+        {/* Fullscreen Button */}
         <button
-          onClick={() => setVideoOpen(!videoOpen)}
-          disabled={!videoUrl}
-          className={`flex items-center gap-1.5 px-2 py-1 rounded transition-colors cursor-pointer ${
-            !videoUrl
-              ? "bg-zinc-900 text-zinc-600 cursor-not-allowed border border-zinc-800"
-              : videoOpen
-              ? "bg-emerald-600 text-white shadow-sm"
-              : "bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300"
-          }`}
-          title={videoUrl ? "Toggle Synchronized Onboard Camera Video" : "No onboard video for this mission"}
+          onClick={toggleFullscreen}
+          className="p-2 rounded-xl bg-zinc-950/80 hover:bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white backdrop-blur-md shadow-xl transition-colors cursor-pointer"
+          title={isFullscreen ? "Exit Fullscreen" : "Fullscreen 3D World"}
         >
-          <Video className="w-3.5 h-3.5" />
-          <span>PiP</span>
+          {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
         </button>
       </div>
 
-      {/* Synchronized Onboard Camera Video Player (PiP Window) */}
+      {/* FLOATING ONBOARD CAMERA PICTURE-IN-PICTURE (When Active) */}
       {videoOpen && videoUrl && (
-        <div
-          className={`absolute top-4 right-4 z-20 bg-zinc-950/95 border border-zinc-700/80 rounded-xl shadow-2xl overflow-hidden backdrop-blur transition-all duration-300 ${
-            videoMinimized ? "w-64 h-10" : "w-80 h-56"
-          }`}
-        >
-          {/* PiP Header */}
+        <div className="absolute top-16 right-4 z-30 w-72 bg-zinc-950/95 border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden backdrop-blur animate-in fade-in slide-in-from-top-2 duration-200">
           <div className="h-8 bg-zinc-900/90 px-3 flex items-center justify-between border-b border-zinc-800 select-none">
             <div className="flex items-center gap-1.5 text-[11px] font-semibold text-zinc-200">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span>Onboard Camera</span>
+              <span>FLIGHT CAMERA</span>
             </div>
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => setVideoMinimized(!videoMinimized)}
-                className="p-1 text-zinc-400 hover:text-zinc-200 rounded"
-                title={videoMinimized ? "Expand" : "Minimize"}
-                aria-label={videoMinimized ? "Expand video" : "Minimize video"}
-              >
-                {videoMinimized ? <Maximize2 className="w-3 h-3" /> : <Minimize2 className="w-3 h-3" />}
-              </button>
-            </div>
+            <button
+              onClick={() => setVideoOpen(false)}
+              className="p-1 text-zinc-400 hover:text-white rounded transition-colors cursor-pointer"
+              title="Close Camera"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
           </div>
 
-          {/* Video element */}
-          {!videoMinimized && (
-            <div className="w-full h-[calc(100%-2rem)] bg-black relative">
-              <video
-                ref={videoRef}
-                key={videoUrl}
-                src={videoUrl}
-                controls
-                autoPlay
-                loop
-                muted
-                playsInline
-                className="w-full h-full object-cover"
-              />
-              <div className="absolute bottom-1 left-2 text-[10px] font-mono text-zinc-400 bg-black/60 px-1 rounded">
-                CAM_0
+          <div className="w-full h-44 bg-black relative">
+            <video
+              ref={videoRef}
+              key={videoUrl}
+              src={videoUrl}
+              autoPlay
+              loop
+              muted
+              playsInline
+              className="w-full h-full object-cover"
+            />
+            <div className="absolute bottom-2 left-2 text-[10px] font-mono text-zinc-300 bg-black/80 px-2 py-0.5 rounded border border-zinc-800">
+              Frame {currentFrame} / {totalFrames}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* BOTTOM-LEFT: Contextual 3D | Map | Split Segmented Control */}
+      <div className="absolute bottom-4 left-4 z-20">
+        <div className="flex items-center gap-1 p-1 rounded-xl bg-zinc-950/90 border border-zinc-800 backdrop-blur-md shadow-2xl text-xs font-mono font-medium">
+          <button
+            onClick={() => setViewportMode("3D")}
+            className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 ${
+              viewportMode === "3D"
+                ? "bg-emerald-950/90 text-emerald-400 font-bold border border-emerald-800/60"
+                : "text-zinc-400 hover:text-white hover:bg-zinc-900"
+            }`}
+          >
+            <span className={`w-1.5 h-1.5 rounded-full ${viewportMode === "3D" ? "bg-emerald-400" : "bg-transparent"}`} />
+            <span>3D</span>
+          </button>
+          <button
+            onClick={() => setViewportMode("MAP")}
+            className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 ${
+              viewportMode === "MAP"
+                ? "bg-emerald-950/90 text-emerald-400 font-bold border border-emerald-800/60"
+                : "text-zinc-400 hover:text-white hover:bg-zinc-900"
+            }`}
+          >
+            <span className={`w-1.5 h-1.5 rounded-full ${viewportMode === "MAP" ? "bg-emerald-400" : "bg-transparent"}`} />
+            <span>Map</span>
+          </button>
+          <button
+            onClick={() => setViewportMode("SPLIT")}
+            className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 ${
+              viewportMode === "SPLIT"
+                ? "bg-emerald-950/90 text-emerald-400 font-bold border border-emerald-800/60"
+                : "text-zinc-400 hover:text-white hover:bg-zinc-900"
+            }`}
+          >
+            <span className={`w-1.5 h-1.5 rounded-full ${viewportMode === "SPLIT" ? "bg-emerald-400" : "bg-transparent"}`} />
+            <span>Split</span>
+          </button>
+        </div>
+      </div>
+
+      {/* BOTTOM-RIGHT: Contextual Measure ▾ Dropdown */}
+      <div className="absolute bottom-4 right-4 z-20 flex flex-col items-end gap-2" ref={measureRef}>
+        {/* Active Measurement Tool Instruction / Feedback Chip */}
+        {activeTool && (
+          <div className="bg-zinc-950/95 border border-zinc-750 backdrop-blur-md px-3 py-2 rounded-xl shadow-2xl flex items-center gap-2.5 text-xs text-zinc-200 animate-in fade-in slide-in-from-bottom-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span>
+              {activeTool === "distance" && "Click two points in 3D scene to measure distance (e.g. 14.8m)"}
+              {activeTool === "height" && "Select structure base + roof apex (Measured: 11.8m)"}
+              {activeTool === "area" && "Trace building polygon perimeter (Footprint: 93.3 m²)"}
+              {activeTool === "volume" && "Compute 3D structural mass (Volume: 1,100.9 m³)"}
+              {activeTool === "coordinate" && "Inspect point: 47.38435° N, 8.54519° E (423.8m)"}
+            </span>
+            <button
+              onClick={() => {
+                setActiveTool(null);
+                setMeasureStep(0);
+              }}
+              className="p-1 hover:bg-zinc-800 text-zinc-400 hover:text-white rounded-lg transition-colors ml-1 cursor-pointer"
+              title="Cancel measurement"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* Measure Dropdown Trigger Button */}
+        <div className="relative">
+          <button
+            onClick={() => setMeasureMenuOpen(!measureMenuOpen)}
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl backdrop-blur-md border text-xs font-medium transition-all shadow-2xl cursor-pointer ${
+              activeTool
+                ? "bg-emerald-600 text-white border-emerald-500 font-semibold"
+                : "bg-zinc-950/90 hover:bg-zinc-900 border-zinc-800 text-zinc-300 hover:text-white"
+            }`}
+          >
+            {activeTool ? (
+              <>
+                {activeTool === "distance" && <Ruler className="w-3.5 h-3.5" />}
+                {activeTool === "height" && <ArrowUpDown className="w-3.5 h-3.5" />}
+                {activeTool === "area" && <Square className="w-3.5 h-3.5" />}
+                {activeTool === "volume" && <Box className="w-3.5 h-3.5" />}
+                {activeTool === "coordinate" && <MapPin className="w-3.5 h-3.5" />}
+                <span className="capitalize">{activeTool}</span>
+              </>
+            ) : (
+              <>
+                <span>Measure</span>
+                <ChevronUp className={`w-3.5 h-3.5 transition-transform ${measureMenuOpen ? "rotate-180" : ""}`} />
+              </>
+            )}
+          </button>
+
+          {/* Measure Menu Popout */}
+          {measureMenuOpen && (
+            <div className="absolute bottom-full right-0 mb-2 w-44 rounded-xl bg-zinc-950 border border-zinc-800 shadow-2xl p-1 z-30 text-xs">
+              <div className="px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-zinc-500 font-mono">
+                MEASURE
               </div>
+              <button
+                onClick={() => selectMeasurementTool("distance")}
+                className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer text-left ${
+                  activeTool === "distance" ? "bg-emerald-950 text-emerald-300 font-semibold" : "text-zinc-300 hover:bg-zinc-900 hover:text-white"
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Ruler className="w-3.5 h-3.5 text-zinc-400" />
+                  <span>Distance</span>
+                </div>
+                {activeTool === "distance" && <Check className="w-3 h-3 text-emerald-400" />}
+              </button>
+              <button
+                onClick={() => selectMeasurementTool("height")}
+                className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer text-left ${
+                  activeTool === "height" ? "bg-emerald-950 text-emerald-300 font-semibold" : "text-zinc-300 hover:bg-zinc-900 hover:text-white"
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <ArrowUpDown className="w-3.5 h-3.5 text-zinc-400" />
+                  <span>Height</span>
+                </div>
+                {activeTool === "height" && <Check className="w-3 h-3 text-emerald-400" />}
+              </button>
+              <button
+                onClick={() => selectMeasurementTool("area")}
+                className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer text-left ${
+                  activeTool === "area" ? "bg-emerald-950 text-emerald-300 font-semibold" : "text-zinc-300 hover:bg-zinc-900 hover:text-white"
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Square className="w-3.5 h-3.5 text-zinc-400" />
+                  <span>Area</span>
+                </div>
+                {activeTool === "area" && <Check className="w-3 h-3 text-emerald-400" />}
+              </button>
+              <button
+                onClick={() => selectMeasurementTool("volume")}
+                className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer text-left ${
+                  activeTool === "volume" ? "bg-emerald-950 text-emerald-300 font-semibold" : "text-zinc-300 hover:bg-zinc-900 hover:text-white"
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Box className="w-3.5 h-3.5 text-zinc-400" />
+                  <span>Volume</span>
+                </div>
+                {activeTool === "volume" && <Check className="w-3 h-3 text-emerald-400" />}
+              </button>
+              <button
+                onClick={() => selectMeasurementTool("coordinate")}
+                className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer text-left ${
+                  activeTool === "coordinate" ? "bg-emerald-950 text-emerald-300 font-semibold" : "text-zinc-300 hover:bg-zinc-900 hover:text-white"
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <MapPin className="w-3.5 h-3.5 text-zinc-400" />
+                  <span>Coordinate</span>
+                </div>
+                {activeTool === "coordinate" && <Check className="w-3 h-3 text-emerald-400" />}
+              </button>
             </div>
           )}
         </div>
-      )}
+      </div>
     </div>
   );
 };
