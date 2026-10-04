@@ -193,6 +193,7 @@ export default function Home() {
           onOpenMission={handleOpenMission}
           onOpenMissionManager={() => setIsMissionsManagerOpen(true)}
           onClearDemoData={handleClearDemoData}
+          onEnterStudio={() => setViewMode("studio")}
         />
       ) : (
         /* MISSION STUDIO (Hero 3D Screen) */

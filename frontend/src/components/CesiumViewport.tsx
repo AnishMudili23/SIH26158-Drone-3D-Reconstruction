@@ -48,8 +48,12 @@ export const CesiumViewport: React.FC<CesiumViewportProps> = ({
   buildings = [],
 }) => {
   const [viewportMode, setViewportMode] = useState<"3D" | "MAP" | "SPLIT">("3D");
-  const [videoOpen, setVideoOpen] = useState(false);
-  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [videoOpen, setVideoOpen] = useState(true);
+  const [videoUrl, setVideoUrl] = useState<string | null>(
+    missionId === "zurich_mav_mission"
+      ? `${API_BASE}/static/outputs/zurich_mav_mission/drone_flight_zurich.mp4`
+      : null
+  );
   const [backendReachable, setBackendReachable] = useState<boolean | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
 

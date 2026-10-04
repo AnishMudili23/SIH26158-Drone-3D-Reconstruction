@@ -30,7 +30,7 @@ export const SignatureMomentOverlay: React.FC<SignatureMomentOverlayProps> = ({
       <div className="text-center max-w-md px-6 space-y-8 z-10">
         <div className="space-y-2">
           <div className="text-xs uppercase tracking-widest font-mono text-emerald-400 font-bold">
-            AEROMESH
+            AEROMESH_3D
           </div>
           <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-white uppercase">
             Your World is Ready

@@ -189,7 +189,7 @@ export const StructureInspector: React.FC<StructureInspectorProps> = ({
           {/* Header */}
           <div className="pb-3 border-b border-zinc-850">
             <h2 className="text-xs font-bold uppercase tracking-wider text-white font-mono">
-              AEROMESH FINDINGS
+              AEROMESH_3D FINDINGS
             </h2>
             <div className="text-[11px] text-zinc-400 mt-0.5">
               {activeBuildings.length} structures detected

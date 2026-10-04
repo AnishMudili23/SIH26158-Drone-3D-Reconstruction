@@ -2,21 +2,16 @@
 
 import React, { useState, useRef, useEffect } from "react";
 import {
-  Satellite,
-  ShieldCheck,
-  Cpu,
-  RefreshCw,
   Layers,
   Plus,
-  Home,
   Compass,
-  CheckCircle2,
-  HardDrive,
-  Activity,
-  X,
-  Ruler,
-  FolderDown,
+  RefreshCw,
   Search,
+  ArrowRight,
+  ShieldCheck,
+  Cpu,
+  Activity,
+  Box,
 } from "lucide-react";
 import { MissionSummary, SensorQualityReport } from "@/types/mission";
 
@@ -74,20 +69,94 @@ export const Header: React.FC<HeaderProps> = ({
     (m) => m.category === "DEMO_MISSIONS" || m.is_demo || m.id === "zurich_mav_mission"
   );
 
+  // If in Landing Home mode, render the Floating Glass Pill Navigation (Reference UI Style)
+  if (viewMode === "home") {
+    return (
+      <header className="fixed top-4 left-0 right-0 z-50 flex justify-center px-4 pointer-events-none select-none">
+        <div className="glass-pill max-w-5xl w-full h-14 rounded-full px-5 sm:px-6 flex items-center justify-between shadow-[0_16px_36px_rgba(0,0,0,0.85)] pointer-events-auto border border-white/12">
+          {/* 1. Left: Brand Mark */}
+          <div
+            onClick={() => onViewModeChange?.("home")}
+            className="flex items-center gap-2.5 cursor-pointer group"
+          >
+            <div className="w-7 h-7 rounded-lg bg-emerald-400 text-zinc-950 flex items-center justify-center font-black font-mono shadow-[0_0_15px_rgba(52,211,153,0.35)] group-hover:scale-105 transition-transform">
+              <span className="text-xs">&gt;_</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[15px] tracking-wider uppercase font-mono font-bold text-white group-hover:text-emerald-400 transition-colors">
+                AEROMESH
+              </span>
+              <span className="text-[11px] font-mono px-2 py-0.5 rounded-md bg-emerald-950/80 text-emerald-400 border border-emerald-500/40 font-bold shadow-[0_0_10px_rgba(52,211,153,0.25)]">
+                3D
+              </span>
+            </div>
+          </div>
+
+          {/* 2. Center: Monospace Spaced Navigation Links */}
+          <nav className="hidden md:flex items-center gap-6 text-[13px] font-mono uppercase tracking-[0.08em] font-medium text-zinc-400">
+            <a href="#overview" className="hover:text-emerald-400 transition-colors">
+              OVERVIEW
+            </a>
+            <a href="#systems" className="hover:text-emerald-400 transition-colors">
+              SYSTEMS
+            </a>
+            <a href="#metrics" className="hover:text-emerald-400 transition-colors">
+              METRICS
+            </a>
+            <a href="#evidence" className="hover:text-emerald-400 transition-colors">
+              EVIDENCE
+            </a>
+            <a href="#missions" className="hover:text-emerald-400 transition-colors">
+              MISSIONS
+            </a>
+          </nav>
+
+          {/* 3. Right: Command Search & Glowing Launch Studio Pill Button */}
+          <div className="flex items-center gap-3">
+            {onOpenSearch && (
+              <button
+                onClick={onOpenSearch}
+                className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-900/80 hover:bg-zinc-800 border border-zinc-700/80 text-zinc-400 hover:text-zinc-200 text-xs transition-colors cursor-pointer"
+                title="Search commands (Ctrl + K)"
+              >
+                <Search className="w-3.5 h-3.5 text-zinc-400" />
+                <span className="font-mono text-[11px] text-zinc-400">Ctrl K</span>
+              </button>
+            )}
+
+            <button
+              onClick={() => onViewModeChange?.("studio")}
+              className="flex items-center gap-2 px-5 py-2 rounded-full bg-emerald-400 hover:bg-emerald-300 text-zinc-950 font-bold text-[13px] transition-all shadow-[0_0_25px_rgba(52,211,153,0.45)] cursor-pointer transform hover:-translate-y-0.5 active:translate-y-0"
+            >
+              <span>Launch Studio</span>
+              <ArrowRight className="w-3.5 h-3.5 text-zinc-950 stroke-[2.5]" />
+            </button>
+          </div>
+        </div>
+      </header>
+    );
+  }
+
+  // STUDIO MODE HEADER: Elevated Mission Control Bar
   return (
-    <header className="h-14 border-b border-zinc-850 bg-[#05070a] px-5 flex items-center justify-between shrink-0 select-none z-30">
+    <header className="h-14 border-b border-zinc-800/80 bg-[#06090e]/95 backdrop-blur-md px-5 flex items-center justify-between shrink-0 select-none z-30">
       {/* 1. Left: Brand & Main Section Navigation */}
       <div className="flex items-center gap-8">
         <div
           onClick={() => onViewModeChange?.("home")}
-          className="flex items-center gap-2 cursor-pointer group"
+          className="flex items-center gap-2.5 cursor-pointer group"
         >
-          <div className="w-7 h-7 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 font-bold group-hover:scale-105 transition-transform">
-            <Layers className="w-4 h-4" />
+          <div className="w-7 h-7 rounded-lg bg-emerald-400 text-zinc-950 flex items-center justify-center font-black font-mono shadow-[0_0_15px_rgba(52,211,153,0.35)] group-hover:scale-105 transition-transform">
+            <span className="text-xs">&gt;_</span>
           </div>
-          <span className="text-sm tracking-wider uppercase font-mono font-bold text-white group-hover:text-emerald-400 transition-colors">
-            AEROMESH
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-[14px] tracking-wider uppercase font-mono font-bold text-white group-hover:text-emerald-400 transition-colors">
+              AEROMESH
+            </span>
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-emerald-950/80 text-emerald-400 border border-emerald-500/40 font-bold shadow-[0_0_10px_rgba(52,211,153,0.2)]">
+              3D
+            </span>
+          </div>
         </div>
 
         {/* Clean Top Navigation Links */}
@@ -100,11 +169,7 @@ export const Header: React.FC<HeaderProps> = ({
                 onViewModeChange?.("home");
               }
             }}
-            className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
-              viewMode === "home"
-                ? "bg-zinc-800 text-white font-semibold"
-                : "text-zinc-400 hover:text-white hover:bg-zinc-900"
-            }`}
+            className="px-3 py-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-900 transition-colors cursor-pointer"
           >
             Missions
           </button>
@@ -115,8 +180,8 @@ export const Header: React.FC<HeaderProps> = ({
               onTabChange?.("workspace");
             }}
             className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
-              viewMode === "studio" && activeTab === "workspace"
-                ? "bg-zinc-800 text-white font-semibold"
+              activeTab === "workspace"
+                ? "bg-zinc-800/90 text-white font-semibold border border-zinc-700/50"
                 : "text-zinc-400 hover:text-white hover:bg-zinc-900"
             }`}
           >
@@ -128,8 +193,8 @@ export const Header: React.FC<HeaderProps> = ({
               onTabChange?.("evidence");
             }}
             className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
-              viewMode === "studio" && activeTab === "evidence"
-                ? "bg-zinc-800 text-white font-semibold"
+              activeTab === "evidence"
+                ? "bg-zinc-800/90 text-white font-semibold border border-zinc-700/50"
                 : "text-zinc-400 hover:text-white hover:bg-zinc-900"
             }`}
           >
@@ -141,8 +206,8 @@ export const Header: React.FC<HeaderProps> = ({
               onTabChange?.("measurements");
             }}
             className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
-              viewMode === "studio" && activeTab === "measurements"
-                ? "bg-zinc-800 text-white font-semibold"
+              activeTab === "measurements"
+                ? "bg-zinc-800/90 text-white font-semibold border border-zinc-700/50"
                 : "text-zinc-400 hover:text-white hover:bg-zinc-900"
             }`}
           >
@@ -154,8 +219,8 @@ export const Header: React.FC<HeaderProps> = ({
               onTabChange?.("exports");
             }}
             className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
-              viewMode === "studio" && activeTab === "exports"
-                ? "bg-zinc-800 text-white font-semibold"
+              activeTab === "exports"
+                ? "bg-zinc-800/90 text-white font-semibold border border-zinc-700/50"
                 : "text-zinc-400 hover:text-white hover:bg-zinc-900"
             }`}
           >
@@ -164,40 +229,38 @@ export const Header: React.FC<HeaderProps> = ({
         </nav>
       </div>
 
-      {/* 2. Center: Categorized Mission Selector (MY MISSIONS vs DEMO MISSIONS) */}
+      {/* 2. Center: Categorized Mission Selector */}
       <div className="hidden lg:flex items-center gap-3">
-        {viewMode === "studio" && (
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-zinc-500 font-medium">Mission:</span>
-            <select
-              value={selectedMissionId}
-              onChange={(e) => onSelectMission(e.target.value)}
-              aria-label="Select drone mission"
-              className="bg-zinc-900 border border-zinc-750 text-zinc-200 text-xs rounded-lg px-2.5 py-1 font-medium focus:outline-none focus:border-emerald-500 transition-colors cursor-pointer max-w-[220px] truncate"
-            >
-              {myMissions.length > 0 && (
-                <optgroup label="MY MISSIONS">
-                  {myMissions.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name}
-                    </option>
-                  ))}
-                </optgroup>
-              )}
-              {demoMissions.length > 0 && (
-                <optgroup label="DEMO MISSIONS">
-                  {demoMissions.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name}
-                    </option>
-                  ))}
-                </optgroup>
-              )}
-            </select>
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-zinc-500 font-medium">Mission:</span>
+          <select
+            value={selectedMissionId}
+            onChange={(e) => onSelectMission(e.target.value)}
+            aria-label="Select drone mission"
+            className="bg-zinc-900/90 border border-zinc-750 text-zinc-200 text-xs rounded-lg px-2.5 py-1 font-medium focus:outline-none focus:border-emerald-500 transition-colors cursor-pointer max-w-[220px] truncate"
+          >
+            {myMissions.length > 0 && (
+              <optgroup label="MY MISSIONS">
+                {myMissions.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {demoMissions.length > 0 && (
+              <optgroup label="DEMO MISSIONS">
+                {demoMissions.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+          </select>
+        </div>
 
-        {/* Global Command / Search Trigger (Ctrl + K) */}
+        {/* Global Command / Search Trigger */}
         {onOpenSearch && (
           <button
             onClick={onOpenSearch}

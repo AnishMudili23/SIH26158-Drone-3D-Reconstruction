@@ -123,7 +123,7 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search AeroMesh… (missions, structures, evidence, tools)"
+            placeholder="Search AeroMesh_3D… (missions, structures, evidence, tools)"
             className="w-full bg-transparent text-sm text-white placeholder:text-zinc-500 focus:outline-none font-sans"
             autoFocus
           />
@@ -232,7 +232,7 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
             <span>↵ to select</span>
             <span>esc to close</span>
           </div>
-          <span className="text-emerald-400 font-semibold">AeroMesh Command System</span>
+          <span className="text-emerald-400 font-semibold">AeroMesh_3D Command System</span>
         </div>
       </div>
     </div>

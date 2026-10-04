@@ -148,7 +148,7 @@ export const PersonaDetailModal: React.FC<PersonaDetailModalProps> = ({
                 <span className="text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded bg-emerald-950/80 text-emerald-400 border border-emerald-800/40">
                   {data.badge}
                 </span>
-                <span className="text-xs text-zinc-500 font-mono">AeroMesh Domain Profile</span>
+                <span className="text-xs text-zinc-500 font-mono">AeroMesh_3D Domain Profile</span>
               </div>
               <h2 className="text-xl font-bold text-white tracking-tight">{data.name}</h2>
               <p className="text-xs text-zinc-400 mt-1 max-w-lg leading-relaxed">{data.tagline}</p>
